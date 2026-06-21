@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+        spring-boot-starter-parent gives us:
+        - Managed dependency versions (no need to specify versions for Spring libs)
+        - Default plugin configuration for building the JAR
+        - Java encoding settings
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.chatbot</groupId>
+    <artifactId>chatbot-saas</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>chatbot-saas</name>
+    <description>AI Chatbot SaaS Platform - Built for Learning Spring Boot</description>
+
+    <properties>
+        <!-- Use Java 21 (latest LTS at time of writing) -->
+        <java.version>21</java.version>
+    </properties>
+
+    <dependencies>
+
+        <!-- ============================================
+             CORE SPRING BOOT DEPENDENCIES
+             ============================================ -->
+
+        <!--
+            spring-boot-starter-web:
+            Gives us everything to build REST APIs:
+            - Embedded Tomcat (no need for separate web server)
+            - Spring MVC (for @RestController, @GetMapping, etc.)
+            - Jackson (for converting Java objects to/from JSON)
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-security:
+            Adds authentication and authorization capabilities:
+            - Spring Security filters
+            - Password encoding utilities (BCrypt)
+            - Authentication managers
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-data-jpa:
+            ORM (Object-Relational Mapping) support:
+            - Hibernate (maps Java classes to database tables)
+            - Spring Data JPA (auto-generates SQL from method names)
+            - Transaction management
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+
+        <!--
+            spring-boot-starter-validation:
+            Input validation annotations:
+            - @NotBlank, @Email, @Size on DTOs
+            - Automatically validates request bodies
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- ============================================
+             DATABASE
+             ============================================ -->
+
+        <!--
+            PostgreSQL JDBC Driver:
+            Allows Java to connect to PostgreSQL database.
+            scope=runtime means it's only needed when running, not compiling.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ============================================
+             CODE REDUCTION
+             ============================================ -->
+
+        <!--
+            Lombok:
+            Reduces boilerplate code by auto-generating:
+            - getters and setters (@Data)
+            - constructors (@NoArgsConstructor, @AllArgsConstructor)
+            - builder pattern (@Builder)
+            - @Slf4j for logging
+        -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- ============================================
+             JWT (JSON Web Token)
+             ============================================ -->
+
+        <!--
+            JJWT library for creating and validating JWT tokens.
+            We need all 3 parts:
+            - jjwt-api: the public API (interfaces we use in code)
+            - jjwt-impl: the implementation (runtime only)
+            - jjwt-jackson: JSON support for JWT (runtime only)
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>0.12.3</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>0.12.3</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>0.12.3</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- ============================================
+             PHASE 3: KNOWLEDGE BASE
+             ============================================ -->
+
+        <!--
+            Apache PDFBox: extracts text from PDF files.
+            When a user uploads a PDF, we use this to read its text content
+            so we can chunk it and store it for the AI to reference.
+        -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.1</version>
+        </dependency>
+
+        <!--
+            Spring WebFlux: provides WebClient for making HTTP calls to external APIs.
+            We use it to call:
+            - OpenAI embedding API (to convert text to vectors)
+            - Qdrant REST API (to store and search vectors)
+            WebClient is the modern non-blocking HTTP client in Spring.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
+
+        <!-- ============================================
+             TESTING
+             ============================================ -->
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- Exclude Lombok from the final JAR (it's only needed at compile time) -->
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

@@ -1,0 +1,18 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes / local data
+postgres_data/
+qdrant_data/
+uploads/
+
+# Environment files (never commit secrets)
+.env
+.env.local
+.env.production

@@ -1,0 +1,13 @@
+# Maven build output
+target/
+*.class
+
+# Maven wrapper (optional — include if you want others to build without installing Maven)
+.mvn/
+
+# Log files
+*.log
+logs/
+
+# Local config overrides
+application-local.properties

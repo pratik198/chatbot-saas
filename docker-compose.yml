@@ -1,0 +1,138 @@
+version: '3.8'
+
+# =============================================================
+# DOCKER COMPOSE — ChatBot SaaS (conflict-free ports)
+# =============================================================
+# Other services are already running on 3000/8080/5432/6333/11434.
+# This compose uses:
+#   Frontend:   http://localhost:3001
+#   Backend:    http://localhost:8089
+#   PostgreSQL: localhost:5434
+#   Qdrant UI:  http://localhost:6337/dashboard
+#   Ollama:     reuses chatplatform-ollama at host port 11434
+#
+# HOW to use:
+#   Start:   docker-compose up --build
+#   Stop:    docker-compose down
+#   Logs:    docker-compose logs -f backend
+# =============================================================
+
+services:
+
+  # ─────────────────────────────────────────────────────────
+  # SERVICE 1: PostgreSQL (own instance, port 5434 on host)
+  # ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatbot_postgres
+
+    environment:
+      POSTGRES_DB: chatbot_saas
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+
+    ports:
+      - "5434:5432"     # host 5434 → container 5432 (avoids conflict with chatplatform on 5432)
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────────────────────
+  # SERVICE 2: Qdrant Vector Database (port 6337 on host)
+  # ─────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    container_name: chatbot_qdrant
+
+    ports:
+      - "6337:6333"   # host 6337 → container 6333 (avoids conflict on 6333)
+      - "6338:6334"   # host 6338 → container 6334
+
+    volumes:
+      - qdrant_data:/qdrant/storage
+    # Qdrant's minimal image has no curl/wget — no healthcheck possible.
+    # Backend Spring Boot retries the connection on startup.
+
+  # ─────────────────────────────────────────────────────────
+  # SERVICE 3: Spring Boot Backend (port 8089 on host)
+  # ─────────────────────────────────────────────────────────
+  # NOTE: Ollama is NOT started here — we reuse chatplatform-ollama
+  # already running at host:11434.
+  # extra_hosts lets the container reach the host machine via
+  # "host.docker.internal" (required on Linux Docker).
+  # ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+
+    container_name: chatbot_backend
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets container call host's port 11434
+
+    environment:
+      # PostgreSQL (internal Docker network — use service name + container port)
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: chatbot_saas
+      DB_USERNAME: postgres
+      DB_PASSWORD: password
+
+      JWT_SECRET: dGhpcyBpcyBhIGxvbmcgZW5vdWdoIHNlY3JldCBrZXkgZm9yIGp3dCBzaWduaW5nIGluIGRldmVsb3BtZW50IG9ubHkh
+      JWT_EXPIRATION: 86400000
+
+      # Qdrant (internal Docker network)
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_VECTOR_DIMENSION: 768
+
+      # Ollama — reuse chatplatform-ollama running on the HOST at port 11434
+      # host.docker.internal resolves to the host machine from within the container
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: llama3.2:3b
+      OLLAMA_EMBEDDING_MODEL: nomic-embed-text
+
+      FILE_UPLOAD_DIR: /app/uploads
+
+    volumes:
+      - uploads_data:/app/uploads
+
+    ports:
+      - "8089:8080"   # host 8089 → container 8080
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+
+  # ─────────────────────────────────────────────────────────
+  # SERVICE 4: React + Vite Frontend (port 3001 on host)
+  # ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8089   # baked into the JS bundle at build time
+
+    container_name: chatbot_frontend
+
+    ports:
+      - "3001:80"   # host 3001 → nginx container port 80
+
+    depends_on:
+      - backend
+
+# ─────────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+  qdrant_data:
+  uploads_data:

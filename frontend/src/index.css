@@ -1,0 +1,57 @@
+/* Tailwind CSS directives — these import Tailwind's styles */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import Google Fonts — Inter is clean and modern (used by Notion, Vercel) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+/* Custom base styles */
+@layer base {
+  body {
+    font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+}
+
+/* Custom component classes — reusable building blocks */
+@layer components {
+  /* Standard page container */
+  .page-container {
+    @apply min-h-screen bg-gray-50;
+  }
+
+  /* Card component used throughout the dashboard */
+  .card {
+    @apply bg-white rounded-xl border border-gray-200 shadow-sm;
+  }
+
+  /* Primary button style */
+  .btn-primary {
+    @apply bg-brand-600 text-white px-4 py-2 rounded-lg font-medium
+           hover:bg-brand-700 focus:outline-none focus:ring-2
+           focus:ring-brand-500 focus:ring-offset-2 transition-colors
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Secondary button style */
+  .btn-secondary {
+    @apply bg-white text-gray-700 px-4 py-2 rounded-lg font-medium
+           border border-gray-300 hover:bg-gray-50 focus:outline-none
+           focus:ring-2 focus:ring-brand-500 focus:ring-offset-2
+           transition-colors;
+  }
+
+  /* Form input style */
+  .input-field {
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg text-sm
+           focus:outline-none focus:ring-2 focus:ring-brand-500
+           focus:border-transparent placeholder-gray-400
+           disabled:bg-gray-50 disabled:text-gray-500;
+  }
+}

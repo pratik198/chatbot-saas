@@ -14,10 +14,14 @@
  *   Parent (chatbots page) manages the state and passes handlers down.
  */
 
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot, Edit2, Trash2, Globe, EyeOff, Calendar } from 'lucide-react';
+import { Bot, Edit2, Trash2, Globe, EyeOff, Calendar, MessageCircle } from 'lucide-react';
+import TestBotModal from './TestBotModal';
 
 export default function ChatbotCard({ chatbot, onDelete, onTogglePublish }) {
+  const [showTest, setShowTest] = useState(false);
+
   // Format the created date for display
   const createdDate = new Date(chatbot.createdAt).toLocaleDateString('en-US', {
     month: 'short',
@@ -98,6 +102,20 @@ export default function ChatbotCard({ chatbot, onDelete, onTogglePublish }) {
           Edit
         </Link>
 
+        {/* Test button → opens the live embed chat in a modal, right on this page (published bots only) */}
+        {chatbot.isPublished && (
+          <button
+            onClick={() => setShowTest(true)}
+            className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium
+                       text-green-600 hover:bg-green-50 hover:border-green-300
+                       py-2 px-3 rounded-lg border border-gray-200
+                       transition-colors"
+          >
+            <MessageCircle className="w-3.5 h-3.5" />
+            Test
+          </button>
+        )}
+
         {/* Publish / Unpublish toggle */}
         <button
           onClick={() => onTogglePublish(chatbot.id)}
@@ -126,6 +144,10 @@ export default function ChatbotCard({ chatbot, onDelete, onTogglePublish }) {
           <Trash2 className="w-3.5 h-3.5" />
         </button>
       </div>
+
+      {showTest && (
+        <TestBotModal chatbotId={chatbot.id} onClose={() => setShowTest(false)} />
+      )}
     </div>
   );
 }

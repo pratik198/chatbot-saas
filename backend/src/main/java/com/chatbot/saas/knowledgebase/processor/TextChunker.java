@@ -42,11 +42,16 @@ import java.util.List;
 @Component
 public class TextChunker {
 
-    /** Target number of words per chunk */
-    private static final int DEFAULT_CHUNK_SIZE = 500;
+    /**
+     * Target number of words per chunk. Smaller chunks mean the RAG step
+     * injects less text per retrieved chunk into the prompt — meaningfully
+     * faster on CPU-only / low-RAM machines where prompt processing is the
+     * main bottleneck, at the cost of slightly less context per chunk.
+     */
+    private static final int DEFAULT_CHUNK_SIZE = 300;
 
     /** Number of words to overlap between consecutive chunks */
-    private static final int DEFAULT_OVERLAP = 50;
+    private static final int DEFAULT_OVERLAP = 30;
 
     /**
      * Splits text into overlapping chunks using word boundaries.

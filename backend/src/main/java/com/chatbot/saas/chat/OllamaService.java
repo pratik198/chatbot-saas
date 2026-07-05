@@ -2,11 +2,11 @@ package com.chatbot.saas.chat;
 
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,14 +60,23 @@ import java.util.Map;
  *   To test manually: curl http://localhost:11434/api/tags
  */
 @Service
+@ConditionalOnProperty(prefix = "chat", name = "provider", havingValue = "ollama", matchIfMissing = true)
 @Slf4j
-public class OllamaService {
+public class OllamaService implements ChatCompletionService {
 
     @Value("${ollama.base-url:http://localhost:11434}")
     private String ollamaBaseUrl;
 
     @Value("${ollama.model:llama3.2}")
     private String ollamaModel;
+
+    // Ollama defaults to a 2048-token context window, which the RAG-injected
+    // knowledge chunks + instructions + history can easily exceed. When that
+    // happens Ollama silently truncates from the START of the prompt — i.e.
+    // exactly where the retrieved knowledge base context lives — so the model
+    // "forgets" the very facts RAG just retrieved. Raise it explicitly.
+    @Value("${ollama.num-ctx:4096}")
+    private int numCtx;
 
     /**
      * Sends a conversation history to Ollama and gets the AI's reply.
@@ -76,6 +85,7 @@ public class OllamaService {
      *                   [ {"role": "system", "content": "..."}, {"role": "user", "content": "..."}, ... ]
      * @return the AI assistant's response text, or an error message if Ollama is not running
      */
+    @Override
     public String chat(List<Map<String, String>> messages) {
         try {
             WebClient client = WebClient.builder()
@@ -88,6 +98,7 @@ public class OllamaService {
             body.put("model", ollamaModel);
             body.put("messages", messages);
             body.put("stream", false);   // false = return full response, not a stream
+            body.put("options", Map.of("num_ctx", numCtx));
 
             log.debug("Sending {} messages to Ollama model '{}'", messages.size(), ollamaModel);
 
@@ -125,20 +136,6 @@ public class OllamaService {
 
             return "I encountered an error while processing your request. Please try again.";
         }
-    }
-
-    /**
-     * Builds an Ollama-format message map.
-     * Helper to avoid repeating Map.of() boilerplate in ChatService.
-     *
-     * @param role    - "system", "user", or "assistant"
-     * @param content - the message text
-     */
-    public static Map<String, String> buildMessage(String role, String content) {
-        Map<String, String> msg = new HashMap<>();
-        msg.put("role", role);
-        msg.put("content", content);
-        return msg;
     }
 
     /**

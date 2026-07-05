@@ -114,6 +114,25 @@ public class Document {
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
+    /**
+     * Bulk FAQ import progress tracking (null for all other document types).
+     * A bulk import is ONE Document row regardless of how many Q&A pairs it
+     * contains — each pair still gets its own Qdrant point/DocumentChunk for
+     * the chat instant-answer shortcut, but they're not surfaced as separate
+     * rows in the knowledge base UI. totalPairs/processedPairs let the UI
+     * show live progress while a large (up to 50,000-pair) import processes
+     * in the background — embedding 50k short texts sequentially on modest
+     * hardware can take a long time.
+     */
+    @Column(name = "total_pairs")
+    private Integer totalPairs;
+
+    @Column(name = "processed_pairs")
+    private Integer processedPairs;
+
+    @Column(name = "skipped_pairs")
+    private Integer skippedPairs;
+
     @CreatedDate
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

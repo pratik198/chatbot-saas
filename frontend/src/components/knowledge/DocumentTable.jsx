@@ -98,13 +98,35 @@ export default function DocumentTable({ documents, onDelete, onRetrain }) {
                       {doc.errorMessage}
                     </p>
                   )}
+                  {/* Bulk FAQ import progress — large imports can take a long time in the background */}
+                  {doc.totalPairs != null && doc.status === 'PROCESSING' && (
+                    <div className="mt-1 w-32">
+                      <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-yellow-500 rounded-full transition-all"
+                          style={{ width: `${doc.totalPairs > 0 ? Math.round((doc.processedPairs / doc.totalPairs) * 100) : 0}%` }}
+                        />
+                      </div>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        {doc.processedPairs?.toLocaleString()} / {doc.totalPairs?.toLocaleString()}
+                      </p>
+                    </div>
+                  )}
                 </td>
 
                 {/* Chunk count */}
                 <td className="py-3 px-4">
-                  <span className="text-gray-700">
-                    {doc.status === 'READY' ? doc.chunkCount : '—'}
-                  </span>
+                  {doc.totalPairs != null ? (
+                    <span className="text-gray-700">
+                      {doc.status === 'READY'
+                        ? `${doc.chunkCount.toLocaleString()} pairs${doc.skippedPairs > 0 ? ` (${doc.skippedPairs} skipped)` : ''}`
+                        : '—'}
+                    </span>
+                  ) : (
+                    <span className="text-gray-700">
+                      {doc.status === 'READY' ? doc.chunkCount : '—'}
+                    </span>
+                  )}
                 </td>
 
                 {/* Created date */}

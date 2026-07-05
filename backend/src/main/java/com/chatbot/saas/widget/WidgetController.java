@@ -1,17 +1,15 @@
 package com.chatbot.saas.widget;
 
+import com.chatbot.saas.chat.ChatService;
 import com.chatbot.saas.chat.Conversation;
 import com.chatbot.saas.chat.ConversationRepository;
-import com.chatbot.saas.chat.Message;
 import com.chatbot.saas.chat.MessageRepository;
-import com.chatbot.saas.chat.OllamaService;
 import com.chatbot.saas.chat.dto.MessageResponse;
+import com.chatbot.saas.chat.dto.SendMessageResponse;
 import com.chatbot.saas.chatbot.Chatbot;
 import com.chatbot.saas.chatbot.ChatbotRepository;
 import com.chatbot.saas.common.exception.ResourceNotFoundException;
 import com.chatbot.saas.common.response.ApiResponse;
-import com.chatbot.saas.knowledgebase.embedding.EmbeddingService;
-import com.chatbot.saas.knowledgebase.qdrant.QdrantService;
 import com.chatbot.saas.handoff.AgentHandoff;
 import com.chatbot.saas.handoff.AgentHandoffRepository;
 import com.chatbot.saas.lead.Lead;
@@ -24,7 +22,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,9 +69,7 @@ public class WidgetController {
     private final ChatbotRepository chatbotRepository;
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
-    private final OllamaService ollamaService;
-    private final EmbeddingService embeddingService;
-    private final QdrantService qdrantService;
+    private final ChatService chatService;
     private final LeadRepository leadRepository;
     private final AgentHandoffRepository handoffRepository;
 
@@ -177,80 +172,32 @@ public class WidgetController {
         Chatbot chatbot = getPublishedChatbot(chatbotId);
 
         // Find or create conversation for this session
-        Conversation conversation = conversationRepository
-                .findBySessionTokenAndChatbotId(sessionToken, chatbotId)
-                .orElseGet(() -> {
-                    // First message — create a new conversation
-                    String title = userMessage.length() > 80
-                            ? userMessage.substring(0, 80) + "..."
-                            : userMessage;
-                    return conversationRepository.save(
-                            Conversation.builder()
-                                    .chatbotId(chatbotId)
-                                    .userId(chatbot.getUserId())   // owner's userId
-                                    .sessionToken(sessionToken)
-                                    .title(title)
-                                    .messageCount(0)
-                                    .build()
-                    );
-                });
+        var existingConversation = conversationRepository.findBySessionTokenAndChatbotId(sessionToken, chatbotId);
+        boolean isFirstMessage = existingConversation.isEmpty();
+        Conversation conversation = existingConversation.orElseGet(() -> {
+            String title = userMessage.length() > 80
+                    ? userMessage.substring(0, 80) + "..."
+                    : userMessage;
+            return conversationRepository.save(
+                    Conversation.builder()
+                            .chatbotId(chatbotId)
+                            .userId(chatbot.getUserId())   // owner's userId
+                            .sessionToken(sessionToken)
+                            .title(title)
+                            .messageCount(0)
+                            .build()
+            );
+        });
 
-        // ── RAG pipeline (same as ChatService) ─────────────────────────────────
-        // 1. Save user message
-        Message savedUser = messageRepository.save(
-                Message.builder()
-                        .conversationId(conversation.getId())
-                        .role(Message.Role.user)
-                        .content(userMessage)
-                        .build()
-        );
-
-        // 2. Embed + Qdrant search
-        List<Map<String, Object>> chunks = new ArrayList<>();
-        try {
-            float[] embedding = embeddingService.embed(userMessage);
-            if (embedding != null) {
-                chunks = qdrantService.searchSimilar(embedding, chatbotId, 3);
-            }
-        } catch (Exception e) {
-            log.warn("Widget RAG search failed: {}", e.getMessage());
-        }
-
-        // 3. Build system prompt
-        String systemPrompt = buildWidgetSystemPrompt(chatbot, chunks);
-
-        // 4. Load recent history (last 10 messages)
-        List<Message> history = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
-        List<Map<String, String>> ollamaMessages = new ArrayList<>();
-        ollamaMessages.add(OllamaService.buildMessage("system", systemPrompt));
-        int start = Math.max(0, history.size() - 11); // exclude current
-        for (int i = start; i < history.size() - 1; i++) {
-            Message m = history.get(i);
-            ollamaMessages.add(OllamaService.buildMessage(m.getRole().name(), m.getContent()));
-        }
-        ollamaMessages.add(OllamaService.buildMessage("user", userMessage));
-
-        // 5. Call Ollama
-        String aiReply = ollamaService.chat(ollamaMessages);
-
-        // 6. Save AI reply
-        Message savedAi = messageRepository.save(
-                Message.builder()
-                        .conversationId(conversation.getId())
-                        .role(Message.Role.assistant)
-                        .content(aiReply)
-                        .build()
-        );
-
-        // 7. Update message count
-        long total = messageRepository.countByConversationId(conversation.getId());
-        conversation.setMessageCount((int) total);
-        conversationRepository.save(conversation);
+        // Delegate to the same RAG pipeline the authenticated dashboard chat
+        // uses (embed → Qdrant search → FAQ shortcut → system prompt → Ollama)
+        // so anonymous widget visitors get identical behavior and tuning.
+        SendMessageResponse response = chatService.processMessage(conversation, chatbot, userMessage, isFirstMessage);
 
         Map<String, Object> result = new HashMap<>();
-        result.put("conversationId", conversation.getId());
-        result.put("userMessage", MessageResponse.fromMessage(savedUser));
-        result.put("assistantMessage", MessageResponse.fromMessage(savedAi));
+        result.put("conversationId", response.getConversationId());
+        result.put("userMessage", response.getUserMessage());
+        result.put("assistantMessage", response.getAssistantMessage());
 
         return ResponseEntity.ok(ApiResponse.success("Message sent", result));
     }
@@ -334,23 +281,5 @@ public class WidgetController {
             throw new ResourceNotFoundException("Chatbot is not available");
         }
         return chatbot;
-    }
-
-    private String buildWidgetSystemPrompt(Chatbot chatbot, List<Map<String, Object>> chunks) {
-        StringBuilder sb = new StringBuilder();
-        if (chatbot.getSystemPrompt() != null && !chatbot.getSystemPrompt().isBlank()) {
-            sb.append(chatbot.getSystemPrompt()).append("\n\n");
-        } else {
-            sb.append("You are ").append(chatbot.getName()).append(", a helpful AI assistant.\n\n");
-        }
-        if (!chunks.isEmpty()) {
-            sb.append("Relevant context:\n");
-            for (int i = 0; i < chunks.size(); i++) {
-                String text = (String) chunks.get(i).get("text");
-                if (text != null) sb.append("[").append(i + 1).append("] ").append(text.trim()).append("\n");
-            }
-            sb.append("\nUse this context to answer accurately. Say so if you don't know.\n");
-        }
-        return sb.toString();
     }
 }

@@ -2,7 +2,6 @@ package com.chatbot.saas.handoff;
 
 import com.chatbot.saas.chat.ConversationRepository;
 import com.chatbot.saas.chat.MessageRepository;
-import com.chatbot.saas.chat.OllamaService;
 import com.chatbot.saas.chat.Message;
 import com.chatbot.saas.chat.dto.MessageResponse;
 import com.chatbot.saas.chatbot.ChatbotRepository;

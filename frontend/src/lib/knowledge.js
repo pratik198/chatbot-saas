@@ -39,6 +39,42 @@ export async function addFaq(chatbotId, question, answer) {
   return response.data.data;
 }
 
+/**
+ * Add many FAQ pairs at once — one "question | answer" pair per line
+ * (up to 50,000 pairs). Returns a single Document with status=PROCESSING;
+ * poll getDocuments() and watch totalPairs/processedPairs for progress.
+ */
+export async function addBulkFaqs(chatbotId, faqText) {
+  const response = await api.post('/api/knowledge/faq/bulk', { chatbotId, faqText });
+  return response.data.data;
+}
+
+/**
+ * Same as addBulkFaqs, but the pairs come from an uploaded .txt or .pdf file
+ * instead of pasted text — for imports too large to comfortably paste.
+ */
+export async function uploadBulkFaqFile(chatbotId, file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await api.post(`/api/knowledge/faq/bulk-file?chatbotId=${chatbotId}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data.data;
+}
+
+/**
+ * Upload up to 10 .txt/.pdf files in one request — each becomes its own
+ * bulk-import document. Returns an array of Documents.
+ */
+export async function uploadBulkFaqFiles(chatbotId, files) {
+  const formData = new FormData();
+  files.forEach(file => formData.append('files', file));
+  const response = await api.post(`/api/knowledge/faq/bulk-files?chatbotId=${chatbotId}`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+  return response.data.data;
+}
+
 /** Add plain text content */
 export async function addText(chatbotId, title, content) {
   const response = await api.post('/api/knowledge/text', { chatbotId, title, content });

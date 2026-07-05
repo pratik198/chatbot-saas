@@ -10,8 +10,9 @@
 
 import { useState, useEffect } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, Save, Globe, EyeOff, Trash2 } from 'lucide-react';
+import { ArrowLeft, Loader2, Save, Globe, EyeOff, Trash2, MessageCircle, BookOpen } from 'lucide-react';
 import ChatbotPreview from '@/components/chatbot/ChatbotPreview';
+import TestBotModal from '@/components/chatbot/TestBotModal';
 import { getChatbot, updateChatbot, togglePublish, deleteChatbot } from '@/lib/chatbots';
 
 const TABS = [
@@ -30,6 +31,7 @@ export default function ChatbotEditPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showTest, setShowTest] = useState(false);
 
   useEffect(() => {
     getChatbot(chatbotId)
@@ -121,6 +123,16 @@ export default function ChatbotEditPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <Link to={`/knowledge?chatbotId=${chatbotId}`}
+            className="btn-secondary flex items-center gap-1.5 text-brand-600 hover:bg-brand-50 hover:border-brand-300">
+            <BookOpen className="w-4 h-4" />Knowledge Base
+          </Link>
+          {formData.isPublished && (
+            <button type="button" onClick={() => setShowTest(true)}
+              className="btn-secondary flex items-center gap-1.5 text-green-600 hover:bg-green-50 hover:border-green-300">
+              <MessageCircle className="w-4 h-4" />Test Bot
+            </button>
+          )}
           <button type="button" onClick={handleDelete}
             className="btn-secondary flex items-center gap-1.5 text-red-600 hover:bg-red-50 hover:border-red-300">
             <Trash2 className="w-4 h-4" />Delete
@@ -252,6 +264,10 @@ export default function ChatbotEditPage() {
           </div>
         </div>
       </form>
+
+      {showTest && (
+        <TestBotModal chatbotId={chatbotId} onClose={() => setShowTest(false)} />
+      )}
     </div>
   );
 }

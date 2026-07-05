@@ -3,6 +3,7 @@ package com.chatbot.saas.knowledgebase;
 import com.chatbot.saas.common.response.ApiResponse;
 import com.chatbot.saas.knowledgebase.dto.AddFaqRequest;
 import com.chatbot.saas.knowledgebase.dto.AddTextRequest;
+import com.chatbot.saas.knowledgebase.dto.BulkFaqRequest;
 import com.chatbot.saas.knowledgebase.dto.DocumentResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -90,6 +91,56 @@ public class DocumentController {
         DocumentResponse doc = documentService.addFaq(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success("FAQ added successfully", doc));
+    }
+
+    /**
+     * POST /api/knowledge/faq/bulk
+     * Adds many FAQ pairs at once from pasted text — one "question | answer"
+     * per line, up to 50,000 pairs. Returns immediately with status=PROCESSING;
+     * the pairs are embedded in the background (poll GET /api/knowledge for
+     * progress via totalPairs/processedPairs on the returned document).
+     */
+    @PostMapping("/faq/bulk")
+    public ResponseEntity<ApiResponse<DocumentResponse>> addBulkFaqs(
+            @Valid @RequestBody BulkFaqRequest request) {
+
+        DocumentResponse doc = documentService.addBulkFaqs(request);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(doc.getTotalPairs() + " FAQ pairs queued — processing in background", doc));
+    }
+
+    /**
+     * POST /api/knowledge/faq/bulk-file?chatbotId={id}
+     * Same as above, but the pairs come from an uploaded .txt or .pdf file
+     * (same "question | answer" per line format) instead of a pasted string —
+     * for imports too large to comfortably paste into a textarea.
+     */
+    @PostMapping("/faq/bulk-file")
+    public ResponseEntity<ApiResponse<DocumentResponse>> addBulkFaqsFromFile(
+            @RequestParam Long chatbotId,
+            @RequestParam("file") MultipartFile file) throws IOException {
+
+        DocumentResponse doc = documentService.addBulkFaqsFromFile(chatbotId, file);
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(doc.getTotalPairs() + " FAQ pairs queued — processing in background", doc));
+    }
+
+    /**
+     * POST /api/knowledge/faq/bulk-files?chatbotId={id}
+     * Same as bulk-file, but accepts up to 10 files in one request — each
+     * becomes its own bulk-import document, processed independently.
+     */
+    @PostMapping("/faq/bulk-files")
+    public ResponseEntity<ApiResponse<List<DocumentResponse>>> addBulkFaqsFromFiles(
+            @RequestParam Long chatbotId,
+            @RequestParam("files") List<MultipartFile> files) throws IOException {
+
+        List<DocumentResponse> docs = documentService.addBulkFaqsFromFiles(chatbotId, files);
+        int totalPairs = docs.stream().mapToInt(d -> d.getTotalPairs() == null ? 0 : d.getTotalPairs()).sum();
+        return ResponseEntity.status(HttpStatus.ACCEPTED)
+                .body(ApiResponse.success(
+                        docs.size() + " file(s) queued, " + totalPairs + " total FAQ pairs — processing in background",
+                        docs));
     }
 
     /**

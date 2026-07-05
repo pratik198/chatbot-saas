@@ -132,8 +132,9 @@ public class SecurityConfig {
         // Allow these HTTP methods
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
 
-        // Allow these headers in requests (Authorization is needed for JWT)
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+        // Allow these headers in requests (Authorization is needed for JWT,
+        // X-Session-Token is needed by the public widget chat endpoints)
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Session-Token"));
 
         // Allow credentials (needed if you ever use cookies alongside JWT)
         configuration.setAllowCredentials(true);

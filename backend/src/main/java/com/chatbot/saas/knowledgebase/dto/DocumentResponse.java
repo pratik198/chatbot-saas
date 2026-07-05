@@ -34,6 +34,11 @@ public class DocumentResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    // Only set for bulk FAQ imports — null for PDFs, single FAQs, and pasted text.
+    private Integer totalPairs;
+    private Integer processedPairs;
+    private Integer skippedPairs;
+
     public static DocumentResponse fromDocument(Document doc) {
         return DocumentResponse.builder()
                 .id(doc.getId())
@@ -46,6 +51,9 @@ public class DocumentResponse {
                 .errorMessage(doc.getStatus() == Document.ProcessingStatus.FAILED ? doc.getErrorMessage() : null)
                 .createdAt(doc.getCreatedAt())
                 .updatedAt(doc.getUpdatedAt())
+                .totalPairs(doc.getTotalPairs())
+                .processedPairs(doc.getProcessedPairs())
+                .skippedPairs(doc.getSkippedPairs())
                 .build();
     }
 }

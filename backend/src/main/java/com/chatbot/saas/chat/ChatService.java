@@ -77,7 +77,7 @@ public class ChatService {
     private final MessageRepository messageRepository;
     private final ChatbotRepository chatbotRepository;
     private final UserRepository userRepository;
-    private final OllamaService ollamaService;
+    private final ChatCompletionService chatCompletionService;
     private final EmbeddingService embeddingService;
     private final QdrantService qdrantService;
 
@@ -88,6 +88,15 @@ public class ChatService {
     // Max knowledge chunks to inject into the prompt (from application.properties)
     @Value("${chat.rag.top-k:3}")
     private int ragTopK;
+
+    // If the top Qdrant match is an FAQ chunk with a similarity score at or
+    // above this threshold, we treat it as a near-exact match and return its
+    // stored answer directly — skipping the Ollama call entirely. This is a
+    // big win on CPU-only hardware: on FAQ hits it turns a 1-2 minute LLM
+    // round-trip into a near-instant DB/Qdrant lookup, with no quality loss
+    // since the answer is the exact one the business owner wrote.
+    @Value("${chat.rag.faq-shortcut-threshold:0.70}")
+    private double faqShortcutThreshold;
 
     // ─── Start a new conversation ─────────────────────────────────────────────
 
@@ -163,8 +172,13 @@ public class ChatService {
      * @param chatbot      - the chatbot entity (for systemPrompt, name, etc.)
      * @param userMessage  - the new message text
      * @param isFirstMessage - whether this is the first message (for title setting)
+     *
+     * NOTE: public — also called directly by WidgetController for anonymous
+     * visitor chat, so the embeddable widget gets the exact same RAG pipeline
+     * (FAQ shortcut, RAG tuning, system prompt) as the authenticated dashboard
+     * chat, instead of maintaining a second, drifting copy of this logic.
      */
-    private SendMessageResponse processMessage(
+    public SendMessageResponse processMessage(
             Conversation conversation,
             Chatbot chatbot,
             String userMessage,
@@ -200,26 +214,39 @@ public class ChatService {
             }
         }
 
-        // ── Step 4: Build the system prompt ───────────────────────────────────
-        // This is what tells Ollama WHO it is and WHAT it knows
-        String systemPrompt = buildSystemPrompt(chatbot, relevantChunks);
+        // ── Step 3b: FAQ shortcut — skip Ollama on a near-exact FAQ match ──────
+        // If the closest knowledge chunk is an FAQ entry and the similarity
+        // score clears our threshold, the visitor's question is essentially
+        // the same question the business already answered. Return that
+        // answer directly instead of paying for a full LLM generation.
+        String shortcutAnswer = tryFaqShortcut(relevantChunks);
 
-        // ── Step 5: Load recent conversation history ──────────────────────────
-        // Load previous messages so the AI can follow the conversation
-        List<Message> history = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
+        String aiResponse;
+        if (shortcutAnswer != null) {
+            log.info("FAQ shortcut hit — skipping Ollama call");
+            aiResponse = shortcutAnswer;
+        } else {
+            // ── Step 4: Build the system prompt ────────────────────────────────
+            // This is what tells Ollama WHO it is and WHAT it knows
+            String systemPrompt = buildSystemPrompt(chatbot, relevantChunks);
 
-        // Keep only the last N messages to avoid overwhelming the AI context window
-        // The current user message is already in the history (we just saved it)
-        // We take the last maxHistoryMessages (excluding the one we just added)
-        List<Message> contextMessages = getContextMessages(history, savedUserMessage.getId());
+            // ── Step 5: Load recent conversation history ───────────────────────
+            // Load previous messages so the AI can follow the conversation
+            List<Message> history = messageRepository.findByConversationIdOrderByCreatedAtAsc(conversation.getId());
 
-        // ── Step 6: Build the messages array for Ollama ───────────────────────
-        List<Map<String, String>> ollamaMessages = buildOllamaMessages(systemPrompt, contextMessages, userMessage);
+            // Keep only the last N messages to avoid overwhelming the AI context window
+            // The current user message is already in the history (we just saved it)
+            // We take the last maxHistoryMessages (excluding the one we just added)
+            List<Message> contextMessages = getContextMessages(history, savedUserMessage.getId());
 
-        // ── Step 7: Call Ollama for the AI response ───────────────────────────
-        log.info("Calling Ollama with {} messages (system + {} history + current)",
-                ollamaMessages.size(), contextMessages.size());
-        String aiResponse = ollamaService.chat(ollamaMessages);
+            // ── Step 6: Build the messages array for Ollama ────────────────────
+            List<Map<String, String>> ollamaMessages = buildOllamaMessages(systemPrompt, contextMessages, userMessage);
+
+            // ── Step 7: Call Ollama for the AI response ────────────────────────
+            log.info("Calling Ollama with {} messages (system + {} history + current)",
+                    ollamaMessages.size(), contextMessages.size());
+            aiResponse = chatCompletionService.chat(ollamaMessages);
+        }
 
         // ── Step 8: Save the AI's reply ───────────────────────────────────────
         Message savedAiMessage = messageRepository.save(
@@ -241,6 +268,52 @@ public class ChatService {
                 .assistantMessage(MessageResponse.fromMessage(savedAiMessage))
                 .conversationTitle(conversation.getTitle())
                 .build();
+    }
+
+    // ─── FAQ shortcut ─────────────────────────────────────────────────────────
+
+    /**
+     * Checks whether the top-ranked knowledge chunk is a near-exact FAQ match.
+     * FAQ chunks are stored as "Q: <question>\nA: <answer>" (see DocumentService.addFaq).
+     * If the closest chunk is an FAQ and its similarity score clears the
+     * configured threshold, we extract and return just the "A: " answer text.
+     * Returns null if there's no confident FAQ match — caller falls back to Ollama.
+     */
+    private String tryFaqShortcut(List<Map<String, Object>> relevantChunks) {
+        if (relevantChunks.isEmpty()) {
+            return null;
+        }
+
+        Map<String, Object> topMatch = relevantChunks.get(0);
+        Object scoreObj = topMatch.get("score");
+        Object sourceType = topMatch.get("sourceType");
+
+        // Chunks embedded before this feature was added won't have "sourceType"
+        // in their Qdrant payload — they simply won't qualify for the shortcut.
+        if (!(scoreObj instanceof Number) || !"FAQ".equals(sourceType)) {
+            return null;
+        }
+
+        double score = ((Number) scoreObj).doubleValue();
+        if (score < faqShortcutThreshold) {
+            return null;
+        }
+
+        String text = (String) topMatch.get("text");
+        if (text == null) {
+            return null;
+        }
+
+        // FAQ chunks are stored as "Q: <question>\nA: <answer>" (DocumentService.addFaq),
+        // but TextChunker rejoins words with single spaces when chunking — so by the
+        // time this text reaches us, the newline is gone and it reads "...question A: answer".
+        // Match "A: " preceded by whitespace/start-of-string rather than a literal "\n".
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(?:^|\\s)A:\\s").matcher(text);
+        if (!matcher.find()) {
+            return null; // not in the expected Q/A format — fall back to Ollama
+        }
+
+        return text.substring(matcher.end()).trim();
     }
 
     // ─── Build RAG-enhanced system prompt ────────────────────────────────────
@@ -278,7 +351,12 @@ public class ChatService {
 
         // Inject RAG context if we found relevant chunks
         if (!relevantChunks.isEmpty()) {
-            sb.append("Relevant information from your knowledge base:\n");
+            sb.append("You work for the business described below. This is YOUR business — you speak on its behalf, ")
+              .append("not the visitor's. If the visitor asks about \"my business\", \"your business\", \"this company\", ")
+              .append("\"this shop\", or similar, they are asking about the business described below, not themselves.\n");
+            sb.append("Example: Visitor asks \"What is my business name?\" or \"What's the name of your business?\" ")
+              .append("→ Both mean the same thing here: answer with the business name found below.\n\n");
+            sb.append("Information about your business, from the knowledge base:\n");
             for (int i = 0; i < relevantChunks.size(); i++) {
                 String text = (String) relevantChunks.get(i).get("text");
                 if (text != null && !text.isBlank()) {
@@ -287,7 +365,7 @@ public class ChatService {
             }
             sb.append("\n");
             sb.append("Instructions:\n");
-            sb.append("- Use the provided context above to answer questions accurately.\n");
+            sb.append("- Use the provided context above to answer questions accurately, speaking as the business.\n");
             sb.append("- If the answer is not in the context, be honest and say so.\n");
             sb.append("- Keep answers clear and helpful.\n");
         } else {
@@ -320,15 +398,15 @@ public class ChatService {
         List<Map<String, String>> messages = new ArrayList<>();
 
         // System message first (always)
-        messages.add(OllamaService.buildMessage("system", systemPrompt));
+        messages.add(ChatCompletionService.buildMessage("system", systemPrompt));
 
         // Add conversation history (previous exchanges)
         for (Message msg : contextMessages) {
-            messages.add(OllamaService.buildMessage(msg.getRole().name(), msg.getContent()));
+            messages.add(ChatCompletionService.buildMessage(msg.getRole().name(), msg.getContent()));
         }
 
         // Add the current user message last
-        messages.add(OllamaService.buildMessage("user", currentUserMessage));
+        messages.add(ChatCompletionService.buildMessage("user", currentUserMessage));
 
         return messages;
     }

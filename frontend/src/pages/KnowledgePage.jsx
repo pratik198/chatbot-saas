@@ -9,19 +9,28 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Link } from 'react-router-dom';
-import { Upload, Plus, FileText, MessageSquare, AlignLeft, Loader2, Bot } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Upload, Plus, FileText, MessageSquare, AlignLeft, Loader2, Bot, ListPlus, Zap, X } from 'lucide-react';
 import DocumentTable from '@/components/knowledge/DocumentTable';
 import { getChatbots } from '@/lib/chatbots';
-import { getDocuments, uploadPdf, addFaq, addText, deleteDocument, retrainDocument } from '@/lib/knowledge';
+import { getDocuments, uploadPdf, addFaq, addBulkFaqs, uploadBulkFaqFiles, addText, deleteDocument, retrainDocument } from '@/lib/knowledge';
+
+const MAX_BULK_FAQ_FILES = 10;
 
 const TABS = [
-  { id: 'pdf',  label: 'Upload PDF',  icon: FileText },
-  { id: 'faq',  label: 'Add FAQ',     icon: MessageSquare },
-  { id: 'text', label: 'Paste Text',  icon: AlignLeft },
+  { id: 'pdf',      label: 'Upload PDF',   icon: FileText },
+  { id: 'faq',      label: 'Add FAQ',      icon: MessageSquare },
+  { id: 'bulkFaq',  label: 'Bulk FAQ',     icon: ListPlus },
+  { id: 'text',     label: 'Paste Text',   icon: AlignLeft },
 ];
 
+const BULK_FAQ_PLACEHOLDER =
+`What are your business hours? | We're open Monday-Friday, 9am-6pm EST.
+Do you offer refunds? | Yes, within 30 days of purchase.
+Do you deliver? | Yes, within a 5km radius.`;
+
 export default function KnowledgePage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [chatbots, setChatbots] = useState([]);
   const [selectedChatbotId, setSelectedChatbotId] = useState('');
   const [documents, setDocuments] = useState([]);
@@ -30,6 +39,8 @@ export default function KnowledgePage() {
   const [pdfFile, setPdfFile] = useState(null);
   const [faqQuestion, setFaqQuestion] = useState('');
   const [faqAnswer, setFaqAnswer] = useState('');
+  const [bulkFaqText, setBulkFaqText] = useState('');
+  const [bulkFaqFiles, setBulkFaqFiles] = useState([]);
   const [textTitle, setTextTitle] = useState('');
   const [textContent, setTextContent] = useState('');
   const [uploading, setUploading] = useState(false);
@@ -40,9 +51,23 @@ export default function KnowledgePage() {
   useEffect(() => {
     getChatbots().then(data => {
       setChatbots(data || []);
-      if (data?.length > 0) setSelectedChatbotId(String(data[0].id));
+      // Deep-link support: /knowledge?chatbotId=3 preselects that bot
+      // (e.g. from the "Knowledge Base" link on a chatbot's edit page).
+      const requested = searchParams.get('chatbotId');
+      const requestedExists = requested && data?.some(bot => String(bot.id) === requested);
+      if (requestedExists) {
+        setSelectedChatbotId(requested);
+      } else if (data?.length > 0) {
+        setSelectedChatbotId(String(data[0].id));
+      }
     }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleChatbotChange = (id) => {
+    setSelectedChatbotId(id);
+    setSearchParams(id ? { chatbotId: id } : {});
+  };
 
   const fetchDocs = useCallback(async () => {
     if (!selectedChatbotId) return;
@@ -104,6 +129,64 @@ export default function KnowledgePage() {
     } finally { setUploading(false); }
   };
 
+  // Shared success message for both the paste and file-upload bulk paths —
+  // the backend returns a single Document with totalPairs/skippedPairs set,
+  // and processes the actual embedding in the background (large imports can
+  // take a long time), so this reports what got queued, not what's finished.
+  const describeBulkQueued = (doc) =>
+    `${doc.totalPairs} FAQ pair${doc.totalPairs === 1 ? '' : 's'} queued for processing!` +
+    (doc.skippedPairs > 0 ? ` ${doc.skippedPairs} line(s) skipped (missing "|" or empty question/answer).` : '') +
+    ' Large imports process in the background — check the table below for progress.';
+
+  const handleBulkFaqSubmit = async (e) => {
+    e.preventDefault();
+    if (!selectedChatbotId || !bulkFaqText.trim()) return;
+    setUploading(true); setUploadError(''); setUploadSuccess('');
+    try {
+      const doc = await addBulkFaqs(Number(selectedChatbotId), bulkFaqText);
+      setBulkFaqText('');
+      setUploadSuccess(describeBulkQueued(doc));
+      setTimeout(() => setUploadSuccess(''), 8000);
+      fetchDocs();
+    } catch (err) {
+      setUploadError(err.response?.data?.message || 'Bulk import failed. Please try again.');
+    } finally { setUploading(false); }
+  };
+
+  const addBulkFaqFiles = (newFiles) => {
+    setUploadError('');
+    const combined = [...bulkFaqFiles, ...newFiles];
+    if (combined.length > MAX_BULK_FAQ_FILES) {
+      setUploadError(`Max ${MAX_BULK_FAQ_FILES} files per upload — only the first ${MAX_BULK_FAQ_FILES} were kept.`);
+    }
+    setBulkFaqFiles(combined.slice(0, MAX_BULK_FAQ_FILES));
+  };
+
+  const removeBulkFaqFile = (index) => {
+    setBulkFaqFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleBulkFaqFileUpload = async (e) => {
+    e.preventDefault();
+    if (!selectedChatbotId || bulkFaqFiles.length === 0) return;
+    setUploading(true); setUploadError(''); setUploadSuccess('');
+    try {
+      const docs = await uploadBulkFaqFiles(Number(selectedChatbotId), bulkFaqFiles);
+      const totalPairs = docs.reduce((sum, d) => sum + (d.totalPairs || 0), 0);
+      const totalSkipped = docs.reduce((sum, d) => sum + (d.skippedPairs || 0), 0);
+      setBulkFaqFiles([]);
+      setUploadSuccess(
+        `${docs.length} file${docs.length === 1 ? '' : 's'} uploaded, ${totalPairs} FAQ pair${totalPairs === 1 ? '' : 's'} queued for processing!` +
+        (totalSkipped > 0 ? ` ${totalSkipped} line(s) skipped across all files.` : '') +
+        ' Large imports process in the background — check the table below for progress.'
+      );
+      setTimeout(() => setUploadSuccess(''), 8000);
+      fetchDocs();
+    } catch (err) {
+      setUploadError(err.response?.data?.message || 'File import failed. Please try again.');
+    } finally { setUploading(false); }
+  };
+
   const handleTextSubmit = async (e) => {
     e.preventDefault();
     if (!selectedChatbotId) return;
@@ -158,7 +241,7 @@ export default function KnowledgePage() {
         </div>
         <div className="flex items-center gap-2">
           <label className="text-sm font-medium text-gray-700">Chatbot:</label>
-          <select value={selectedChatbotId} onChange={e => setSelectedChatbotId(e.target.value)} className="input-field w-48">
+          <select value={selectedChatbotId} onChange={e => handleChatbotChange(e.target.value)} className="input-field w-48">
             {chatbots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
           </select>
         </div>
@@ -232,6 +315,91 @@ export default function KnowledgePage() {
                 </button>
               </div>
             </form>
+          )}
+
+          {activeTab === 'bulkFaq' && (
+            <div className="space-y-6">
+              <div className="flex items-start gap-2 p-3 bg-brand-50 border border-brand-100 rounded-lg text-xs text-brand-700">
+                <Zap className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <p>
+                  Train on many questions at once for instant replies — each pair gets its own
+                  quick-answer entry, so matching visitor questions skip AI generation entirely and
+                  reply immediately. Supports up to <strong>50,000 pairs</strong> per import. Large
+                  imports process in the background — you can navigate away and check progress later.
+                </p>
+              </div>
+
+              {/* Option A: upload up to 10 files at once */}
+              <form onSubmit={handleBulkFaqFileUpload} className="space-y-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  Upload up to {MAX_BULK_FAQ_FILES} .txt or .pdf files <span className="text-gray-400 font-normal">(same "question | answer" per line format)</span>
+                </label>
+                <div
+                  className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-brand-400 hover:bg-brand-50 transition-colors cursor-pointer"
+                  onClick={() => document.getElementById('bulkFaqFileInput').click()}
+                >
+                  <Upload className="w-7 h-7 text-gray-400 mx-auto mb-2" />
+                  <p className="text-sm font-medium text-gray-700">Click to select files or drag & drop</p>
+                  <p className="text-xs text-gray-400 mt-1">.txt or .pdf · Max 25 MB each · up to {MAX_BULK_FAQ_FILES} files · 50,000 pairs per file</p>
+                  <input id="bulkFaqFileInput" type="file" accept=".txt,.pdf" multiple className="hidden"
+                    onChange={e => { addBulkFaqFiles(Array.from(e.target.files)); e.target.value = ''; }} />
+                </div>
+
+                {bulkFaqFiles.length > 0 && (
+                  <ul className="space-y-1.5">
+                    {bulkFaqFiles.map((file, i) => (
+                      <li key={i} className="flex items-center justify-between gap-2 text-xs bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
+                        <span className="text-gray-700 truncate">{file.name}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <span className="text-gray-400">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                          <button type="button" onClick={() => removeBulkFaqFile(i)} className="text-gray-400 hover:text-red-600">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <div className="flex justify-end">
+                  <button type="submit" disabled={uploading || bulkFaqFiles.length === 0} className="btn-primary flex items-center gap-2">
+                    {uploading
+                      ? <><Loader2 className="w-4 h-4 animate-spin" />Uploading...</>
+                      : <><Upload className="w-4 h-4" />Upload {bulkFaqFiles.length > 0 ? `${bulkFaqFiles.length} file${bulkFaqFiles.length === 1 ? '' : 's'}` : ''}</>}
+                  </button>
+                </div>
+              </form>
+
+              <div className="flex items-center gap-3">
+                <div className="flex-1 h-px bg-gray-200" />
+                <span className="text-xs text-gray-400 font-medium">OR PASTE DIRECTLY</span>
+                <div className="flex-1 h-px bg-gray-200" />
+              </div>
+
+              {/* Option B: paste directly */}
+              <form onSubmit={handleBulkFaqSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    One pair per line: <span className="font-mono text-brand-700">question | answer</span>
+                  </label>
+                  <textarea
+                    value={bulkFaqText}
+                    onChange={e => setBulkFaqText(e.target.value)}
+                    placeholder={BULK_FAQ_PLACEHOLDER}
+                    rows={8}
+                    className="input-field resize-none font-mono text-xs"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    {bulkFaqText.split('\n').filter(l => l.includes('|') && l.trim().length > 0).length} pair(s) detected · max 50,000 per import
+                  </p>
+                </div>
+                <div className="flex justify-end">
+                  <button type="submit" disabled={uploading || !bulkFaqText.trim()} className="btn-primary flex items-center gap-2">
+                    {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />Importing...</> : <><ListPlus className="w-4 h-4" />Import FAQs</>}
+                  </button>
+                </div>
+              </form>
+            </div>
           )}
 
           {activeTab === 'text' && (

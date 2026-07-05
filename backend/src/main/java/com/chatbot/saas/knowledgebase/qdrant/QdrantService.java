@@ -260,7 +260,11 @@ public class QdrantService {
                         Map<?, ?> resultMap = (Map<?, ?>) result;
                         Map<?, ?> payload = (Map<?, ?>) resultMap.get("payload");
                         if (payload != null) {
-                            payloads.add(new HashMap<>((Map<String, Object>) payload));
+                            Map<String, Object> merged = new HashMap<>((Map<String, Object>) payload);
+                            // Include the cosine similarity score so callers can decide
+                            // how confident this match is (e.g. FAQ shortcut threshold).
+                            merged.put("score", resultMap.get("score"));
+                            payloads.add(merged);
                         }
                     }
                     return payloads;

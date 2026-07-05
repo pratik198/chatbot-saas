@@ -134,9 +134,36 @@ public class QdrantService {
 
             log.info("Qdrant collection '{}' created with {} dimensions", collectionName, vectorDimension);
 
+            // searchSimilar() filters on "chatbotId" — some Qdrant deployments
+            // (confirmed on Qdrant Cloud, not on a plain local instance) reject
+            // filtering on a field with no index at all, returning a 400 rather
+            // than just scanning unindexed. Create it now so a fresh collection
+            // in any environment works without a silent, hard-to-diagnose
+            // "0 relevant chunks" failure on every single search.
+            createChatbotIdIndex();
+
         } catch (Exception e) {
             log.error("Failed to ensure Qdrant collection exists: {}", e.getMessage());
             throw new RuntimeException("Cannot connect to Qdrant at " + webClient + ". Is Qdrant running?", e);
+        }
+    }
+
+    private void createChatbotIdIndex() {
+        try {
+            Map<String, Object> body = Map.of(
+                    "field_name", "chatbotId",
+                    "field_schema", "integer"
+            );
+            webClient.put()
+                    .uri("/collections/" + collectionName + "/index")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
+            log.info("Created chatbotId payload index on collection '{}'", collectionName);
+        } catch (Exception e) {
+            log.warn("Could not create chatbotId index (may already exist): {}", e.getMessage());
         }
     }
 

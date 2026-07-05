@@ -23,20 +23,30 @@ import java.util.Map;
  *
  * HOW the embedding API works:
  *
- *   Ollama (PRIMARY — free):
+ *   Ollama (PRIMARY — free, local, used in dev):
  *     POST http://localhost:11434/api/embeddings
  *     { "model": "nomic-embed-text", "prompt": "text here" }
  *     → { "embedding": [0.12, -0.45, ...] }   ← 768 floats
  *
- *   OpenAI (FALLBACK — paid):
+ *   Google Gemini (FALLBACK — free tier, used in production where there's
+ *   no local Ollama to fall back to; Groq has no embeddings endpoint at all,
+ *   which is why chat and embeddings use different hosted providers):
+ *     POST https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent
+ *     Header: X-goog-api-key: <GOOGLE_API_KEY>
+ *     { "content": { "parts": [{ "text": "text here" }] } }
+ *     → { "embedding": { "values": [...] } }   ← 3072 floats by default
+ *
+ *   OpenAI (LAST-RESORT FALLBACK — paid):
  *     POST https://api.openai.com/v1/embeddings
  *     { "model": "text-embedding-3-small", "input": "text here" }
  *     → { "data": [{ "embedding": [...] }] }   ← 1536 floats
  *
- * IMPORTANT: nomic-embed-text produces 768-dimensional vectors.
- * OpenAI produces 1536-dimensional vectors.
- * You CANNOT mix them — Qdrant collection must use ONE dimension.
- * Default is 768 (Ollama). Change qdrant.vector.dimension if using OpenAI.
+ * IMPORTANT: each provider produces a different vector size (Ollama 768,
+ * Google 3072, OpenAI 1536) and a Qdrant collection is locked to ONE
+ * dimension for its lifetime. You CANNOT mix providers within one
+ * collection/environment. Set qdrant.vector.dimension to match whichever
+ * provider that environment actually uses — 768 for local dev (Ollama),
+ * 3072 for production (Google).
  */
 @Service
 @Slf4j
@@ -48,6 +58,12 @@ public class EmbeddingService {
     @Value("${ollama.embedding.model:nomic-embed-text}")
     private String ollamaEmbeddingModel;
 
+    @Value("${google.api.key:}")
+    private String googleApiKey;
+
+    @Value("${google.embedding.model:gemini-embedding-001}")
+    private String googleEmbeddingModel;
+
     @Value("${openai.api.key:}")
     private String openAiApiKey;
 
@@ -58,18 +74,27 @@ public class EmbeddingService {
      * Converts text to a float array (embedding vector).
      *
      * @param text - a chunk of document text (500 words max)
-     * @return float[] of 768 numbers (Ollama), or null if embedding is unavailable
+     * @return float[] (dimension depends on whichever provider actually
+     *         handled it — see class doc), or null if none are available
      */
     public float[] embed(String text) {
         if (text == null || text.isBlank()) return null;
 
-        // Try Ollama first (free, local)
+        // Try Ollama first (free, local — this is what local dev uses;
+        // it simply won't be reachable in production, falling through below)
         float[] result = embedWithOllama(text);
         if (result != null) return result;
 
-        // Fall back to OpenAI if key is configured
+        // Fall back to Google's free-tier embedding API (production default)
+        if (googleApiKey != null && !googleApiKey.isBlank()) {
+            log.debug("Ollama unavailable, falling back to Google embedding");
+            result = embedWithGoogle(text);
+            if (result != null) return result;
+        }
+
+        // Last resort: OpenAI, only if explicitly configured (paid)
         if (openAiApiKey != null && !openAiApiKey.isBlank()) {
-            log.debug("Ollama unavailable, falling back to OpenAI embedding");
+            log.debug("Ollama/Google unavailable, falling back to OpenAI embedding");
             return embedWithOpenAi(text);
         }
 
@@ -124,6 +149,57 @@ public class EmbeddingService {
         } catch (Exception e) {
             // Ollama not running — this is expected if user hasn't set it up yet
             log.debug("Ollama embedding unavailable: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    // ─── Google Gemini Embedding (Production fallback) ───────────────────────
+
+    /**
+     * Calls Google's Gemini embedding API.
+     * Free tier, no credit card required — get a key at https://aistudio.google.com
+     *
+     * @return 3072-dimensional float array by default, or null on failure
+     */
+    private float[] embedWithGoogle(String text) {
+        try {
+            WebClient client = WebClient.builder()
+                    .baseUrl("https://generativelanguage.googleapis.com/v1beta")
+                    .build();
+
+            Map<String, Object> body = Map.of(
+                    "content", Map.of("parts", List.of(Map.of("text", text)))
+            );
+
+            Map<?, ?> response = client.post()
+                    .uri("/models/" + googleEmbeddingModel + ":embedContent")
+                    .header("X-goog-api-key", googleApiKey)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body)
+                    .retrieve()
+                    .bodyToMono(Map.class)
+                    .block();
+
+            // Google response: { "embedding": { "values": [0.12, -0.45, ...] } }
+            if (response != null) {
+                Map<?, ?> embeddingObj = (Map<?, ?>) response.get("embedding");
+                if (embeddingObj != null) {
+                    List<?> values = (List<?>) embeddingObj.get("values");
+                    if (values != null && !values.isEmpty()) {
+                        float[] embedding = new float[values.size()];
+                        for (int i = 0; i < values.size(); i++) {
+                            embedding[i] = ((Number) values.get(i)).floatValue();
+                        }
+                        log.debug("Google embedded {} chars → {} dims", text.length(), embedding.length);
+                        return embedding;
+                    }
+                }
+            }
+
+            return null;
+
+        } catch (Exception e) {
+            log.error("Google embedding failed: {}", e.getMessage());
             return null;
         }
     }

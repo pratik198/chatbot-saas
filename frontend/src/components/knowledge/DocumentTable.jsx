@@ -1,162 +1,119 @@
-
 /**
- * WHY this component exists:
- *   Shows all knowledge base documents in a table with their status,
- *   source type, chunk count, and action buttons.
- *
- * WHAT it does:
- *   - Status badge: colored indicator (green=READY, yellow=PROCESSING, red=FAILED)
- *   - Source type badge: PDF / FAQ / TEXT
- *   - Chunk count: how many pieces the document was split into
- *   - Actions: Retrain (refresh embedding), Delete
- *
- * HOW the polling works:
- *   PROCESSING documents need to auto-refresh because the background job
- *   finishes asynchronously. The parent page passes an onRefresh callback
- *   that re-fetches the list every few seconds until all docs are READY.
+ * DocumentTable — knowledge base documents with status, type, progress + actions.
+ * Data/props unchanged; restyled to the design system with a bulk-import
+ * progress bar and themed status badges.
  */
+import {
+  Trash2, RefreshCw, FileText, MessageSquare, AlignLeft, Clock, CheckCircle2, XCircle, ListPlus,
+} from 'lucide-react';
+import { Badge } from '@/components/ui/Badge';
+import { Progress } from '@/components/ui/Progress';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Tooltip } from '@/components/ui/Tooltip';
+import { cn } from '@/lib/utils';
 
-import { Trash2, RefreshCw, FileText, MessageSquare, AlignLeft, Clock, CheckCircle, XCircle } from 'lucide-react';
-
-const SOURCE_ICONS = {
-  PDF:  FileText,
-  FAQ:  MessageSquare,
-  TEXT: AlignLeft,
+const SOURCE = {
+  PDF: { icon: FileText, tone: 'bg-rose-500/12 text-rose-500' },
+  FAQ: { icon: MessageSquare, tone: 'bg-sky-500/12 text-sky-500' },
+  BULK_FAQ: { icon: ListPlus, tone: 'bg-violet-500/12 text-violet-500' },
+  TEXT: { icon: AlignLeft, tone: 'bg-slate-500/12 text-slate-500' },
 };
 
-const SOURCE_COLORS = {
-  PDF:  'bg-red-50 text-red-700',
-  FAQ:  'bg-blue-50 text-blue-700',
-  TEXT: 'bg-gray-100 text-gray-700',
-};
-
-const STATUS_CONFIG = {
-  READY:      { label: 'Ready',      icon: CheckCircle, className: 'text-green-700 bg-green-50' },
-  PROCESSING: { label: 'Processing', icon: Clock,        className: 'text-yellow-700 bg-yellow-50' },
-  FAILED:     { label: 'Failed',     icon: XCircle,      className: 'text-red-700 bg-red-50' },
+const STATUS = {
+  READY: { label: 'Ready', icon: CheckCircle2, variant: 'success' },
+  PROCESSING: { label: 'Processing', icon: Clock, variant: 'warning' },
+  FAILED: { label: 'Failed', icon: XCircle, variant: 'destructive' },
 };
 
 export default function DocumentTable({ documents, onDelete, onRetrain }) {
   if (!documents || documents.length === 0) {
     return (
-      <div className="text-center py-8 text-sm text-gray-400">
-        No documents yet. Upload a PDF, add a FAQ, or paste text above.
-      </div>
+      <EmptyState
+        icon={FileText}
+        title="No documents yet"
+        description="Upload a PDF, add an FAQ, or paste text above to start training this chatbot."
+        className="py-12"
+      />
     );
   }
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
+      <table className="w-full min-w-[680px] text-sm">
         <thead>
-          <tr className="border-b border-gray-200">
-            <th className="text-left py-3 px-4 font-medium text-gray-500">Document</th>
-            <th className="text-left py-3 px-4 font-medium text-gray-500">Type</th>
-            <th className="text-left py-3 px-4 font-medium text-gray-500">Status</th>
-            <th className="text-left py-3 px-4 font-medium text-gray-500">Chunks</th>
-            <th className="text-left py-3 px-4 font-medium text-gray-500">Added</th>
-            <th className="text-right py-3 px-4 font-medium text-gray-500">Actions</th>
+          <tr className="border-b border-border text-left">
+            <th className="px-5 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Document</th>
+            <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Type</th>
+            <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Status</th>
+            <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Chunks</th>
+            <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Added</th>
+            <th className="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground">Actions</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-gray-100">
-          {documents.map(doc => {
-            const StatusIcon = STATUS_CONFIG[doc.status]?.icon || Clock;
-            const SourceIcon = SOURCE_ICONS[doc.sourceType] || FileText;
+        <tbody className="divide-y divide-border">
+          {documents.map((doc) => {
+            const src = SOURCE[doc.sourceType] || SOURCE.TEXT;
+            const SourceIcon = src.icon;
+            const st = STATUS[doc.status] || STATUS.PROCESSING;
+            const StatusIcon = st.icon;
+            const isBulk = doc.totalPairs != null;
+            const pct = isBulk && doc.totalPairs > 0 ? Math.round(((doc.processedPairs || 0) / doc.totalPairs) * 100) : 0;
 
             return (
-              <tr key={doc.id} className="hover:bg-gray-50">
-                {/* Document name */}
-                <td className="py-3 px-4">
-                  <div className="flex items-center gap-2">
-                    <SourceIcon className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                    <div>
-                      <p className="font-medium text-gray-900 truncate max-w-xs">{doc.name}</p>
-                      {doc.fileSize && (
-                        <p className="text-xs text-gray-400">{formatSize(doc.fileSize)}</p>
-                      )}
+              <tr key={doc.id} className="group transition-colors hover:bg-secondary/50">
+                <td className="px-5 py-3.5">
+                  <div className="flex items-center gap-3">
+                    <span className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', src.tone)}>
+                      <SourceIcon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0">
+                      <p className="max-w-[220px] truncate font-medium text-foreground">{doc.name}</p>
+                      {doc.fileSize > 0 && <p className="text-xs text-muted-foreground">{formatSize(doc.fileSize)}</p>}
                     </div>
                   </div>
                 </td>
-
-                {/* Source type badge */}
-                <td className="py-3 px-4">
-                  <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${SOURCE_COLORS[doc.sourceType]}`}>
-                    {doc.sourceType}
-                  </span>
+                <td className="px-4 py-3.5">
+                  <Badge variant="secondary">{(doc.sourceType || 'TEXT').replace('_', ' ')}</Badge>
                 </td>
-
-                {/* Status badge */}
-                <td className="py-3 px-4">
-                  <div className="flex items-center gap-1.5">
-                    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${STATUS_CONFIG[doc.status]?.className}`}>
-                      <StatusIcon className={`w-3 h-3 ${doc.status === 'PROCESSING' ? 'animate-spin' : ''}`} />
-                      {STATUS_CONFIG[doc.status]?.label || doc.status}
-                    </span>
-                  </div>
+                <td className="px-4 py-3.5">
+                  <Badge variant={st.variant}>
+                    <StatusIcon className={cn('h-3 w-3', doc.status === 'PROCESSING' && 'animate-spin')} />
+                    {st.label}
+                  </Badge>
                   {doc.status === 'FAILED' && doc.errorMessage && (
-                    <p className="text-xs text-red-500 mt-0.5 max-w-xs truncate" title={doc.errorMessage}>
-                      {doc.errorMessage}
-                    </p>
+                    <p className="mt-1 max-w-[220px] truncate text-xs text-destructive" title={doc.errorMessage}>{doc.errorMessage}</p>
                   )}
-                  {/* Bulk FAQ import progress — large imports can take a long time in the background */}
-                  {doc.totalPairs != null && doc.status === 'PROCESSING' && (
-                    <div className="mt-1 w-32">
-                      <div className="h-1 bg-gray-200 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-yellow-500 rounded-full transition-all"
-                          style={{ width: `${doc.totalPairs > 0 ? Math.round((doc.processedPairs / doc.totalPairs) * 100) : 0}%` }}
-                        />
-                      </div>
-                      <p className="text-xs text-gray-400 mt-0.5">
-                        {doc.processedPairs?.toLocaleString()} / {doc.totalPairs?.toLocaleString()}
+                  {isBulk && doc.status === 'PROCESSING' && (
+                    <div className="mt-1.5 w-36">
+                      <Progress value={pct} className="h-1.5" />
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {(doc.processedPairs ?? 0).toLocaleString()} / {doc.totalPairs?.toLocaleString()}
                       </p>
                     </div>
                   )}
                 </td>
-
-                {/* Chunk count */}
-                <td className="py-3 px-4">
-                  {doc.totalPairs != null ? (
-                    <span className="text-gray-700">
-                      {doc.status === 'READY'
-                        ? `${doc.chunkCount.toLocaleString()} pairs${doc.skippedPairs > 0 ? ` (${doc.skippedPairs} skipped)` : ''}`
-                        : '—'}
-                    </span>
-                  ) : (
-                    <span className="text-gray-700">
-                      {doc.status === 'READY' ? doc.chunkCount : '—'}
-                    </span>
-                  )}
+                <td className="px-4 py-3.5 text-muted-foreground">
+                  {isBulk
+                    ? (doc.status === 'READY' ? `${doc.chunkCount?.toLocaleString()} pairs${doc.skippedPairs > 0 ? ` (${doc.skippedPairs} skipped)` : ''}` : '—')
+                    : (doc.status === 'READY' ? doc.chunkCount : '—')}
                 </td>
-
-                {/* Created date */}
-                <td className="py-3 px-4 text-gray-500">
-                  {new Date(doc.createdAt).toLocaleDateString('en-US', {
-                    month: 'short', day: 'numeric'
-                  })}
+                <td className="px-4 py-3.5 text-muted-foreground">
+                  {new Date(doc.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </td>
-
-                {/* Actions */}
-                <td className="py-3 px-4">
+                <td className="px-5 py-3.5">
                   <div className="flex items-center justify-end gap-1">
-                    {/* Retrain button — shown for READY and FAILED */}
                     {doc.status !== 'PROCESSING' && (
-                      <button
-                        onClick={() => onRetrain(doc.id)}
-                        className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
-                        title="Retrain (re-embed)"
-                      >
-                        <RefreshCw className="w-3.5 h-3.5" />
-                      </button>
+                      <Tooltip label="Retrain (re-embed)">
+                        <button onClick={() => onRetrain(doc.id)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary" aria-label="Retrain">
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        </button>
+                      </Tooltip>
                     )}
-                    {/* Delete button */}
-                    <button
-                      onClick={() => onDelete(doc.id, doc.name)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                      title="Delete"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <Tooltip label="Delete">
+                      <button onClick={() => onDelete(doc.id, doc.name)} className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive" aria-label="Delete">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </Tooltip>
                   </div>
                 </td>
               </tr>

@@ -1,153 +1,122 @@
-
 /**
- * WHY this component exists:
- *   Each chatbot in the list page is displayed as a card.
- *   Extracting it as a separate component makes the list page clean
- *   and makes it easy to update the card UI without touching the page.
- *
- * WHAT it does:
- *   Displays one chatbot's info: name, status badges, created date.
- *   Has action buttons: Edit, Publish toggle, Delete.
- *
- * HOW it works:
- *   Pure presentational component — all data and actions passed as props.
- *   Parent (chatbots page) manages the state and passes handlers down.
+ * ChatbotCard — one assistant in the grid.
+ * Presentational; all data + actions come from props (logic unchanged).
+ * Delete now uses a styled confirm dialog instead of window.confirm.
  */
-
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot, Edit2, Trash2, Globe, EyeOff, Calendar, MessageCircle } from 'lucide-react';
+import { motion } from 'framer-motion';
+import {
+  Bot, Pencil, Trash2, Globe, EyeOff, MessageCircle, MoreVertical, BookOpen, Circle,
+} from 'lucide-react';
 import TestBotModal from './TestBotModal';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
+import {
+  DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator,
+} from '@/components/ui/DropdownMenu';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
+} from '@/components/ui/Dialog';
+import { staggerItem } from '@/components/ui/PageTransition';
 
 export default function ChatbotCard({ chatbot, onDelete, onTogglePublish }) {
   const [showTest, setShowTest] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const color = chatbot.themeColor || '#6366f1';
 
-  // Format the created date for display
-  const createdDate = new Date(chatbot.createdAt).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  const created = new Date(chatbot.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 
   return (
-    <div className="card p-5 hover:shadow-md transition-shadow">
-      {/* ── Top: Icon + Name + Badges ───────────────────── */}
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-start gap-3">
-          {/* Bot avatar with theme color */}
-          <div
-            className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ backgroundColor: chatbot.themeColor + '20' }} // 20 = 12% opacity hex
-          >
-            <Bot className="w-5 h-5" style={{ color: chatbot.themeColor }} />
+    <motion.div variants={staggerItem}>
+      <Card hover className="group flex h-full flex-col p-5">
+        {/* header */}
+        <div className="flex items-start justify-between">
+          <div className="flex min-w-0 items-start gap-3">
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl shadow-sm ring-1 ring-black/5"
+              style={{ background: `linear-gradient(135deg, ${color}, ${color}cc)` }}>
+              <Bot className="h-5 w-5 text-white" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="truncate font-semibold leading-tight text-foreground">{chatbot.name}</h3>
+              <p className="mt-0.5 line-clamp-1 text-xs text-muted-foreground">
+                {chatbot.description || 'No description'}
+              </p>
+            </div>
           </div>
 
-          <div>
-            <h3 className="font-semibold text-gray-900 leading-tight">{chatbot.name}</h3>
-            {chatbot.description && (
-              <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{chatbot.description}</p>
-            )}
-          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition-opacity hover:bg-secondary hover:text-foreground focus:outline-none group-hover:opacity-100 data-[state=open]:opacity-100" aria-label="More actions">
+                <MoreVertical className="h-4 w-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent>
+              <DropdownMenuItem asChild><Link to={`/chatbots/${chatbot.id}`}><Pencil /> Edit</Link></DropdownMenuItem>
+              <DropdownMenuItem asChild><Link to={`/knowledge?chatbotId=${chatbot.id}`}><BookOpen /> Knowledge base</Link></DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => onTogglePublish(chatbot.id)}>
+                {chatbot.isPublished ? <><EyeOff /> Unpublish</> : <><Globe /> Publish</>}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onSelect={() => setConfirmOpen(true)} className="text-destructive focus:bg-destructive/10 [&_svg]:text-destructive">
+                <Trash2 /> Delete
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
-        {/* Status badges */}
-        <div className="flex flex-col gap-1 items-end">
-          {/* Active / Inactive */}
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            chatbot.isActive
-              ? 'bg-green-100 text-green-700'
-              : 'bg-gray-100 text-gray-500'
-          }`}>
-            {chatbot.isActive ? 'Active' : 'Inactive'}
-          </span>
-
-          {/* Published / Draft */}
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-            chatbot.isPublished
-              ? 'bg-blue-100 text-blue-700'
-              : 'bg-yellow-50 text-yellow-700'
-          }`}>
-            {chatbot.isPublished ? 'Published' : 'Draft'}
-          </span>
+        {/* badges */}
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          {chatbot.isPublished
+            ? <Badge variant="success" dot>Live</Badge>
+            : <Badge variant="warning" dot>Draft</Badge>}
+          <Badge variant="secondary">
+            <Circle className="h-2 w-2" style={{ color, fill: color }} />
+            {chatbot.language?.toUpperCase() || 'EN'}
+          </Badge>
+          <span className="ml-auto text-xs text-muted-foreground">Created {created}</span>
         </div>
-      </div>
 
-      {/* ── Stats Row ────────────────────────────────────── */}
-      <div className="flex items-center gap-3 mb-4 text-xs text-gray-400">
-        <div className="flex items-center gap-1">
-          <Calendar className="w-3.5 h-3.5" />
-          <span>Created {createdDate}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <div
-            className="w-3 h-3 rounded-full border border-gray-300"
-            style={{ backgroundColor: chatbot.themeColor }}
-          />
-          <span>{chatbot.language?.toUpperCase() || 'EN'}</span>
-        </div>
-      </div>
-
-      {/* ── Action Buttons ───────────────────────────────── */}
-      <div className="flex gap-2 pt-3 border-t border-gray-100">
-
-        {/* Edit button → goes to chatbot builder page */}
-        <Link
-          to={`/chatbots/${chatbot.id}`}
-          className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium
-                     text-gray-600 hover:text-brand-600 hover:bg-brand-50
-                     py-2 px-3 rounded-lg border border-gray-200 hover:border-brand-300
-                     transition-colors"
-        >
-          <Edit2 className="w-3.5 h-3.5" />
-          Edit
-        </Link>
-
-        {/* Test button → opens the live embed chat in a modal, right on this page (published bots only) */}
-        {chatbot.isPublished && (
-          <button
-            onClick={() => setShowTest(true)}
-            className="flex-1 flex items-center justify-center gap-1.5 text-xs font-medium
-                       text-green-600 hover:bg-green-50 hover:border-green-300
-                       py-2 px-3 rounded-lg border border-gray-200
-                       transition-colors"
-          >
-            <MessageCircle className="w-3.5 h-3.5" />
-            Test
-          </button>
-        )}
-
-        {/* Publish / Unpublish toggle */}
-        <button
-          onClick={() => onTogglePublish(chatbot.id)}
-          className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-medium
-                      py-2 px-3 rounded-lg border transition-colors ${
-            chatbot.isPublished
-              ? 'text-orange-600 hover:bg-orange-50 border-orange-200 hover:border-orange-300'
-              : 'text-blue-600 hover:bg-blue-50 border-blue-200 hover:border-blue-300'
-          }`}
-        >
-          {chatbot.isPublished ? (
-            <><EyeOff className="w-3.5 h-3.5" />Unpublish</>
-          ) : (
-            <><Globe className="w-3.5 h-3.5" />Publish</>
+        {/* actions */}
+        <div className="mt-5 flex gap-2 border-t border-border pt-4">
+          <Button asChild variant="outline" size="sm" className="flex-1">
+            <Link to={`/chatbots/${chatbot.id}`}><Pencil className="h-3.5 w-3.5" /> Edit</Link>
+          </Button>
+          {chatbot.isPublished && (
+            <Button variant="secondary" size="sm" className="flex-1" onClick={() => setShowTest(true)}>
+              <MessageCircle className="h-3.5 w-3.5" /> Test
+            </Button>
           )}
-        </button>
+          <Button
+            size="sm"
+            variant={chatbot.isPublished ? 'ghost' : 'default'}
+            className="flex-1"
+            onClick={() => onTogglePublish(chatbot.id)}
+          >
+            {chatbot.isPublished ? <><EyeOff className="h-3.5 w-3.5" /> Unpublish</> : <><Globe className="h-3.5 w-3.5" /> Publish</>}
+          </Button>
+        </div>
+      </Card>
 
-        {/* Delete button */}
-        <button
-          onClick={() => onDelete(chatbot.id, chatbot.name)}
-          className="flex items-center justify-center gap-1.5 text-xs font-medium
-                     text-red-500 hover:text-red-700 hover:bg-red-50
-                     py-2 px-3 rounded-lg border border-gray-200 hover:border-red-300
-                     transition-colors"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
-      </div>
+      {showTest && <TestBotModal chatbotId={chatbot.id} onClose={() => setShowTest(false)} />}
 
-      {showTest && (
-        <TestBotModal chatbotId={chatbot.id} onClose={() => setShowTest(false)} />
-      )}
-    </div>
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete "{chatbot.name}"?</DialogTitle>
+            <DialogDescription>
+              This permanently removes the chatbot and its conversations. This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button variant="destructive" onClick={() => { setConfirmOpen(false); onDelete(chatbot.id, chatbot.name); }}>
+              <Trash2 className="h-4 w-4" /> Delete chatbot
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </motion.div>
   );
 }

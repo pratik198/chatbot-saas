@@ -1,198 +1,185 @@
 /**
- * WHY this page exists:
- *   Gives the chatbot owner a high-level view of their performance:
- *   how many conversations happened, how many leads were captured, etc.
- *   Uses CSS-based bar charts (no extra charting library needed).
- *
- * WHAT it shows:
- *   - 4 stat cards: chatbots, conversations, leads, unread leads
- *   - Per-chatbot performance table with visual bar indicators
+ * AnalyticsPage — performance overview.
+ * Data unchanged (getOverview + getChatbotStats); rebuilt with Recharts
+ * (bar + donut), animated KPIs, per-chatbot breakdown, and a conversion insight.
  */
-
 import { useState, useEffect } from 'react';
-import { Bot, MessageSquare, Users, Inbox, TrendingUp, Globe, Loader2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
+import {
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend,
+  PieChart, Pie, Cell,
+} from 'recharts';
+import {
+  Bot, MessageSquare, Users, Inbox, TrendingUp, Globe, BarChart3, PieChart as PieIcon, Sparkles,
+} from 'lucide-react';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
+import { Progress } from '@/components/ui/Progress';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { StatCard } from '@/components/dashboard/StatCard';
+import { staggerContainer } from '@/components/ui/PageTransition';
+import { useChartColors, ChartTooltip, SERIES } from '@/components/charts/ChartKit';
 import { getOverview, getChatbotStats } from '@/lib/analytics';
 
 export default function AnalyticsPage() {
   const [overview, setOverview] = useState(null);
-  const [chatbotStats, setChatbotStats] = useState([]);
+  const [stats, setStats] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const colors = useChartColors();
 
   useEffect(() => {
-    async function load() {
+    (async () => {
       try {
-        const [ov, stats] = await Promise.all([getOverview(), getChatbotStats()]);
-        setOverview(ov);
-        setChatbotStats(stats);
-      } catch {
-        setError('Failed to load analytics.');
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+        const [ov, st] = await Promise.all([getOverview(), getChatbotStats()]);
+        setOverview(ov); setStats(st || []);
+      } catch { setError('Failed to load analytics.'); }
+      finally { setLoading(false); }
+    })();
   }, []);
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <Loader2 className="w-5 h-5 animate-spin text-brand-500 mr-2" />
-      <span className="text-gray-500">Loading analytics...</span>
-    </div>
-  );
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 rounded-2xl" />)}
+        </div>
+        <Skeleton className="h-80 rounded-2xl" />
+      </div>
+    );
+  }
 
-  if (error) return (
-    <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{error}</div>
-  );
+  if (error) {
+    return <Card className="border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</Card>;
+  }
 
-  // Find max conversations for % bar width calculation
-  const maxConversations = Math.max(...chatbotStats.map(s => s.conversations), 1);
-  const maxLeads = Math.max(...chatbotStats.map(s => s.leads), 1);
+  const barData = stats.map((s) => ({
+    name: s.chatbotName?.length > 12 ? s.chatbotName.slice(0, 11) + '…' : s.chatbotName,
+    Conversations: s.conversations || 0, Leads: s.leads || 0,
+  }));
+  const convPie = stats.filter((s) => (s.conversations || 0) > 0).map((s) => ({ name: s.chatbotName, value: s.conversations }));
+  const maxConv = Math.max(...stats.map((s) => s.conversations || 0), 1);
+  const maxLeads = Math.max(...stats.map((s) => s.leads || 0), 1);
+  const conversion = overview?.totalConversations > 0 ? ((overview.totalLeads / overview.totalConversations) * 100).toFixed(1) : null;
 
   return (
-    <div>
-      {/* ── Page Title ──────────────────────────────────────────────────── */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Analytics</h1>
-        <p className="text-sm text-gray-500 mt-1">Performance overview for all your chatbots</p>
-      </div>
+    <div className="space-y-6">
+      {/* KPIs */}
+      <motion.div variants={staggerContainer} initial="hidden" animate="show" className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard icon={Bot} tone="indigo" label="Total Chatbots" value={overview?.totalChatbots ?? 0} hint="All time" />
+        <StatCard icon={MessageSquare} tone="blue" label="Conversations" value={overview?.totalConversations ?? 0} hint="All time" />
+        <StatCard icon={Users} tone="green" label="Leads Captured" value={overview?.totalLeads ?? 0} hint="All time" />
+        <StatCard icon={Inbox} tone="amber" label="Unread Leads" value={overview?.unreadLeads ?? 0} hint="Needs attention" />
+      </motion.div>
 
-      {/* ── Stat Cards ──────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard
-          icon={Bot}
-          label="Total Chatbots"
-          value={overview?.totalChatbots ?? 0}
-          color="brand"
-          description="All time"
-        />
-        <StatCard
-          icon={MessageSquare}
-          label="Conversations"
-          value={overview?.totalConversations ?? 0}
-          color="blue"
-          description="All time"
-        />
-        <StatCard
-          icon={Users}
-          label="Leads Captured"
-          value={overview?.totalLeads ?? 0}
-          color="green"
-          description="All time"
-        />
-        <StatCard
-          icon={Inbox}
-          label="Unread Leads"
-          value={overview?.unreadLeads ?? 0}
-          color="orange"
-          description="Needs attention"
-        />
-      </div>
-
-      {/* ── Per-Chatbot Performance ──────────────────────────────────────── */}
-      <div className="card p-6">
-        <div className="flex items-center gap-2 mb-6">
-          <TrendingUp className="w-5 h-5 text-brand-500" />
-          <h2 className="text-base font-semibold text-gray-900">Chatbot Performance</h2>
-        </div>
-
-        {chatbotStats.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-8">
-            No chatbots yet. Create one to see stats here.
-          </p>
-        ) : (
-          <div className="space-y-6">
-            {chatbotStats.map(stat => (
-              <div key={stat.chatbotId}>
-                {/* Chatbot name + status */}
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="w-3 h-3 rounded-full"
-                      style={{ backgroundColor: stat.themeColor || '#2563eb' }}
-                    />
-                    <span className="text-sm font-medium text-gray-800">{stat.chatbotName}</span>
-                    {stat.isPublished ? (
-                      <span className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
-                        <Globe className="w-3 h-3" /> Live
-                      </span>
-                    ) : (
-                      <span className="text-xs text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full">Draft</span>
-                    )}
-                  </div>
-                  <div className="flex gap-4 text-xs text-gray-500">
-                    <span>{stat.conversations} conversations</span>
-                    <span>{stat.leads} leads</span>
-                  </div>
-                </div>
-
-                {/* Conversations bar */}
-                <div className="mb-1.5">
-                  <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                    <span>Conversations</span>
-                    <span>{stat.conversations}</span>
-                  </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full rounded-full transition-all duration-700"
-                      style={{
-                        width: `${Math.round((stat.conversations / maxConversations) * 100)}%`,
-                        backgroundColor: stat.themeColor || '#2563eb',
-                      }}
-                    />
-                  </div>
-                </div>
-
-                {/* Leads bar */}
-                <div>
-                  <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                    <span>Leads</span>
-                    <span>{stat.leads}</span>
-                  </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-green-400 rounded-full transition-all duration-700"
-                      style={{ width: `${Math.round((stat.leads / maxLeads) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* ── Conversion Insight ──────────────────────────────────────────── */}
-      {overview?.totalConversations > 0 && (
-        <div className="mt-4 card p-4 bg-brand-50 border-brand-100">
-          <p className="text-sm text-brand-700">
-            <span className="font-semibold">Lead conversion rate: </span>
-            {((overview.totalLeads / overview.totalConversations) * 100).toFixed(1)}%
-            {' '}— {overview.totalLeads} leads from {overview.totalConversations} conversations.
-          </p>
-        </div>
+      {conversion && (
+        <Card gradient className="overflow-hidden">
+          <CardContent className="flex flex-wrap items-center gap-4 p-5">
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-brand-gradient text-white shadow-glow-sm"><Sparkles className="h-5 w-5" /></div>
+            <div>
+              <p className="text-sm text-muted-foreground">Lead conversion rate</p>
+              <p className="text-2xl font-bold text-foreground">{conversion}%</p>
+            </div>
+            <p className="ml-auto max-w-xs text-sm text-muted-foreground">
+              {overview.totalLeads} lead{overview.totalLeads === 1 ? '' : 's'} from {overview.totalConversations} conversation{overview.totalConversations === 1 ? '' : 's'}.
+            </p>
+          </CardContent>
+        </Card>
       )}
-    </div>
-  );
-}
 
-function StatCard({ icon: Icon, label, value, color, description }) {
-  const colors = {
-    brand:  { bg: 'bg-brand-50',  icon: 'text-brand-600',  val: 'text-brand-700'  },
-    blue:   { bg: 'bg-blue-50',   icon: 'text-blue-600',   val: 'text-blue-700'   },
-    green:  { bg: 'bg-green-50',  icon: 'text-green-600',  val: 'text-green-700'  },
-    orange: { bg: 'bg-orange-50', icon: 'text-orange-600', val: 'text-orange-700' },
-  };
-  const c = colors[color];
+      {/* charts */}
+      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardHeader><CardTitle className="flex items-center gap-2"><BarChart3 className="h-4 w-4 text-primary" /> Conversations vs leads</CardTitle></CardHeader>
+          <CardContent>
+            {barData.length === 0 ? (
+              <EmptyState icon={BarChart3} title="No data yet" description="Create and publish a chatbot to see performance." className="py-10" />
+            ) : (
+              <div className="h-72 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={barData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }} barGap={6}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
+                    <XAxis dataKey="name" tick={{ fill: colors.axis, fontSize: 12 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: colors.axis, fontSize: 12 }} axisLine={false} tickLine={false} allowDecimals={false} width={40} />
+                    <RTooltip content={<ChartTooltip />} cursor={{ fill: colors.cursor }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
+                    <Bar dataKey="Conversations" fill="#6366f1" radius={[6, 6, 0, 0]} maxBarSize={40} />
+                    <Bar dataKey="Leads" fill="#a855f7" radius={[6, 6, 0, 0]} maxBarSize={40} />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </CardContent>
+        </Card>
 
-  return (
-    <div className="card p-5">
-      <div className={`inline-flex w-10 h-10 rounded-xl ${c.bg} items-center justify-center mb-3`}>
-        <Icon className={`w-5 h-5 ${c.icon}`} />
+        <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2"><PieIcon className="h-4 w-4 text-primary" /> Conversation share</CardTitle></CardHeader>
+          <CardContent>
+            {convPie.length === 0 ? (
+              <EmptyState icon={MessageSquare} title="No conversations yet" className="py-8" />
+            ) : (
+              <>
+                <div className="h-48 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={convPie} dataKey="value" nameKey="name" innerRadius={52} outerRadius={78} paddingAngle={3} stroke="none">
+                        {convPie.map((_, i) => <Cell key={i} fill={SERIES[i % SERIES.length]} />)}
+                      </Pie>
+                      <RTooltip content={<ChartTooltip />} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="mt-2 space-y-2">
+                  {convPie.slice(0, 5).map((d, i) => (
+                    <div key={d.name} className="flex items-center gap-2 text-sm">
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: SERIES[i % SERIES.length] }} />
+                      <span className="flex-1 truncate text-muted-foreground">{d.name}</span>
+                      <span className="font-semibold text-foreground">{d.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </CardContent>
+        </Card>
       </div>
-      <p className="text-2xl font-bold text-gray-900">{value.toLocaleString()}</p>
-      <p className="text-sm font-medium text-gray-700 mt-0.5">{label}</p>
-      <p className="text-xs text-gray-400 mt-0.5">{description}</p>
+
+      {/* per-chatbot breakdown */}
+      <Card>
+        <CardHeader><CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-primary" /> Chatbot performance</CardTitle></CardHeader>
+        <CardContent>
+          {stats.length === 0 ? (
+            <EmptyState icon={Bot} title="No chatbots yet" description="Create one to see per-chatbot metrics here."
+              action={<Button asChild size="sm"><Link to="/chatbots/new">Create a chatbot</Link></Button>} />
+          ) : (
+            <div className="space-y-6">
+              {stats.map((s) => (
+                <div key={s.chatbotId}>
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="h-3 w-3 rounded-full" style={{ backgroundColor: s.themeColor || '#6366f1' }} />
+                    <span className="text-sm font-medium text-foreground">{s.chatbotName}</span>
+                    {s.isPublished ? <Badge variant="success" dot>Live</Badge> : <Badge variant="secondary">Draft</Badge>}
+                    <span className="ml-auto text-xs text-muted-foreground">{s.conversations} conversations · {s.leads} leads</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <div className="mb-1 flex justify-between text-xs text-muted-foreground"><span>Conversations</span><span>{s.conversations}</span></div>
+                      <Progress value={Math.round(((s.conversations || 0) / maxConv) * 100)} className="h-2" />
+                    </div>
+                    <div>
+                      <div className="mb-1 flex justify-between text-xs text-muted-foreground"><span>Leads</span><span>{s.leads}</span></div>
+                      <Progress value={Math.round(((s.leads || 0) / maxLeads) * 100)} className="h-2" barClassName="bg-gradient-to-r from-emerald-500 to-teal-500" />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

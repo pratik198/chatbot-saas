@@ -1,28 +1,34 @@
 /**
- * WHY this page exists:
- *   The Knowledge Base page — users upload PDFs, FAQs, and text to train their chatbot.
- *   The chatbot uses this content to answer questions in Phase 4 (OpenAI GPT-4o).
+ * KnowledgePage — train a chatbot via PDF / FAQ / bulk FAQ / text.
  *
- * HOW it differs from Next.js version:
- *   - Link from react-router-dom
- *   - No 'use client' directive
+ * ALL data logic is preserved from the original: chatbot deep-linking,
+ * PROCESSING polling, single & bulk FAQ, multi-file upload, retrain, delete.
+ * Presentation rebuilt on the design system: real drag & drop, tabs, toasts,
+ * and a styled confirm dialog for deletes.
  */
-
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Upload, Plus, FileText, MessageSquare, AlignLeft, Loader2, Bot, ListPlus, Zap, X } from 'lucide-react';
+import { toast } from 'sonner';
+import {
+  Upload, Plus, FileText, MessageSquare, AlignLeft, Loader2, Bot, ListPlus, Zap, X, Database, FileUp,
+} from 'lucide-react';
 import DocumentTable from '@/components/knowledge/DocumentTable';
+import { Dropzone } from '@/components/knowledge/Dropzone';
+import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Label } from '@/components/ui/Label';
+import { Badge } from '@/components/ui/Badge';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/Tabs';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
+} from '@/components/ui/Dialog';
 import { getChatbots } from '@/lib/chatbots';
 import { getDocuments, uploadPdf, addFaq, addBulkFaqs, uploadBulkFaqFiles, addText, deleteDocument, retrainDocument } from '@/lib/knowledge';
+import { cn } from '@/lib/utils';
 
 const MAX_BULK_FAQ_FILES = 10;
-
-const TABS = [
-  { id: 'pdf',      label: 'Upload PDF',   icon: FileText },
-  { id: 'faq',      label: 'Add FAQ',      icon: MessageSquare },
-  { id: 'bulkFaq',  label: 'Bulk FAQ',     icon: ListPlus },
-  { id: 'text',     label: 'Paste Text',   icon: AlignLeft },
-];
 
 const BULK_FAQ_PLACEHOLDER =
 `What are your business hours? | We're open Monday-Friday, 9am-6pm EST.
@@ -44,22 +50,16 @@ export default function KnowledgePage() {
   const [textTitle, setTextTitle] = useState('');
   const [textContent, setTextContent] = useState('');
   const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState('');
-  const [uploadSuccess, setUploadSuccess] = useState('');
+  const [pendingDelete, setPendingDelete] = useState(null);
   const pollIntervalRef = useRef(null);
 
   useEffect(() => {
-    getChatbots().then(data => {
+    getChatbots().then((data) => {
       setChatbots(data || []);
-      // Deep-link support: /knowledge?chatbotId=3 preselects that bot
-      // (e.g. from the "Knowledge Base" link on a chatbot's edit page).
       const requested = searchParams.get('chatbotId');
-      const requestedExists = requested && data?.some(bot => String(bot.id) === requested);
-      if (requestedExists) {
-        setSelectedChatbotId(requested);
-      } else if (data?.length > 0) {
-        setSelectedChatbotId(String(data[0].id));
-      }
+      const requestedExists = requested && data?.some((bot) => String(bot.id) === requested);
+      if (requestedExists) setSelectedChatbotId(requested);
+      else if (data?.length > 0) setSelectedChatbotId(String(data[0].id));
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -75,12 +75,12 @@ export default function KnowledgePage() {
     try {
       const data = await getDocuments(Number(selectedChatbotId));
       setDocuments(data || []);
-      const hasProcessing = data?.some(d => d.status === 'PROCESSING');
+      const hasProcessing = data?.some((d) => d.status === 'PROCESSING');
       if (hasProcessing && !pollIntervalRef.current) {
         pollIntervalRef.current = setInterval(async () => {
           const refreshed = await getDocuments(Number(selectedChatbotId));
           setDocuments(refreshed || []);
-          if (!refreshed?.some(d => d.status === 'PROCESSING')) {
+          if (!refreshed?.some((d) => d.status === 'PROCESSING')) {
             clearInterval(pollIntervalRef.current);
             pollIntervalRef.current = null;
           }
@@ -102,349 +102,309 @@ export default function KnowledgePage() {
   const handlePdfUpload = async (e) => {
     e.preventDefault();
     if (!pdfFile || !selectedChatbotId) return;
-    setUploading(true); setUploadError(''); setUploadSuccess('');
+    setUploading(true);
     try {
       await uploadPdf(Number(selectedChatbotId), pdfFile);
-      setPdfFile(null); e.target.reset();
-      setUploadSuccess('PDF uploaded! Processing in background...');
-      setTimeout(() => setUploadSuccess(''), 5000);
+      setPdfFile(null);
+      toast.success('PDF uploaded! Processing in the background…');
       fetchDocs();
     } catch (err) {
-      setUploadError(err.response?.data?.message || 'Upload failed. Please try again.');
+      toast.error(err.response?.data?.message || 'Upload failed. Please try again.');
     } finally { setUploading(false); }
   };
 
   const handleFaqSubmit = async (e) => {
     e.preventDefault();
     if (!selectedChatbotId) return;
-    setUploading(true); setUploadError(''); setUploadSuccess('');
+    setUploading(true);
     try {
       await addFaq(Number(selectedChatbotId), faqQuestion, faqAnswer);
       setFaqQuestion(''); setFaqAnswer('');
-      setUploadSuccess('FAQ added and processed!');
-      setTimeout(() => setUploadSuccess(''), 4000);
+      toast.success('FAQ added and processed!');
       fetchDocs();
     } catch (err) {
-      setUploadError(err.response?.data?.message || 'Failed to add FAQ.');
+      toast.error(err.response?.data?.message || 'Failed to add FAQ.');
     } finally { setUploading(false); }
   };
 
-  // Shared success message for both the paste and file-upload bulk paths —
-  // the backend returns a single Document with totalPairs/skippedPairs set,
-  // and processes the actual embedding in the background (large imports can
-  // take a long time), so this reports what got queued, not what's finished.
   const describeBulkQueued = (doc) =>
-    `${doc.totalPairs} FAQ pair${doc.totalPairs === 1 ? '' : 's'} queued for processing!` +
-    (doc.skippedPairs > 0 ? ` ${doc.skippedPairs} line(s) skipped (missing "|" or empty question/answer).` : '') +
-    ' Large imports process in the background — check the table below for progress.';
+    `${doc.totalPairs} FAQ pair${doc.totalPairs === 1 ? '' : 's'} queued` +
+    (doc.skippedPairs > 0 ? ` · ${doc.skippedPairs} line(s) skipped (missing "|").` : '.');
 
   const handleBulkFaqSubmit = async (e) => {
     e.preventDefault();
     if (!selectedChatbotId || !bulkFaqText.trim()) return;
-    setUploading(true); setUploadError(''); setUploadSuccess('');
+    setUploading(true);
     try {
       const doc = await addBulkFaqs(Number(selectedChatbotId), bulkFaqText);
       setBulkFaqText('');
-      setUploadSuccess(describeBulkQueued(doc));
-      setTimeout(() => setUploadSuccess(''), 8000);
+      toast.success(describeBulkQueued(doc), { description: 'Large imports process in the background — watch progress below.' });
       fetchDocs();
     } catch (err) {
-      setUploadError(err.response?.data?.message || 'Bulk import failed. Please try again.');
+      toast.error(err.response?.data?.message || 'Bulk import failed. Please try again.');
     } finally { setUploading(false); }
   };
 
   const addBulkFaqFiles = (newFiles) => {
-    setUploadError('');
     const combined = [...bulkFaqFiles, ...newFiles];
     if (combined.length > MAX_BULK_FAQ_FILES) {
-      setUploadError(`Max ${MAX_BULK_FAQ_FILES} files per upload — only the first ${MAX_BULK_FAQ_FILES} were kept.`);
+      toast.warning(`Max ${MAX_BULK_FAQ_FILES} files per upload — only the first ${MAX_BULK_FAQ_FILES} were kept.`);
     }
     setBulkFaqFiles(combined.slice(0, MAX_BULK_FAQ_FILES));
   };
 
-  const removeBulkFaqFile = (index) => {
-    setBulkFaqFiles(prev => prev.filter((_, i) => i !== index));
-  };
+  const removeBulkFaqFile = (index) => setBulkFaqFiles((prev) => prev.filter((_, i) => i !== index));
 
   const handleBulkFaqFileUpload = async (e) => {
     e.preventDefault();
     if (!selectedChatbotId || bulkFaqFiles.length === 0) return;
-    setUploading(true); setUploadError(''); setUploadSuccess('');
+    setUploading(true);
     try {
       const docs = await uploadBulkFaqFiles(Number(selectedChatbotId), bulkFaqFiles);
       const totalPairs = docs.reduce((sum, d) => sum + (d.totalPairs || 0), 0);
       const totalSkipped = docs.reduce((sum, d) => sum + (d.skippedPairs || 0), 0);
       setBulkFaqFiles([]);
-      setUploadSuccess(
-        `${docs.length} file${docs.length === 1 ? '' : 's'} uploaded, ${totalPairs} FAQ pair${totalPairs === 1 ? '' : 's'} queued for processing!` +
-        (totalSkipped > 0 ? ` ${totalSkipped} line(s) skipped across all files.` : '') +
-        ' Large imports process in the background — check the table below for progress.'
+      toast.success(
+        `${docs.length} file${docs.length === 1 ? '' : 's'} uploaded · ${totalPairs} pair${totalPairs === 1 ? '' : 's'} queued` +
+          (totalSkipped > 0 ? ` · ${totalSkipped} skipped` : ''),
+        { description: 'Large imports process in the background — watch progress below.' },
       );
-      setTimeout(() => setUploadSuccess(''), 8000);
       fetchDocs();
     } catch (err) {
-      setUploadError(err.response?.data?.message || 'File import failed. Please try again.');
+      toast.error(err.response?.data?.message || 'File import failed. Please try again.');
     } finally { setUploading(false); }
   };
 
   const handleTextSubmit = async (e) => {
     e.preventDefault();
     if (!selectedChatbotId) return;
-    setUploading(true); setUploadError(''); setUploadSuccess('');
+    setUploading(true);
     try {
       await addText(Number(selectedChatbotId), textTitle, textContent);
       setTextTitle(''); setTextContent('');
-      setUploadSuccess('Text content added! Processing in background...');
-      setTimeout(() => setUploadSuccess(''), 5000);
+      toast.success('Text content added! Processing in the background…');
       fetchDocs();
     } catch (err) {
-      setUploadError(err.response?.data?.message || 'Failed to add text.');
+      toast.error(err.response?.data?.message || 'Failed to add text.');
     } finally { setUploading(false); }
   };
 
-  const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete "${name}"?`)) return;
+  const doDelete = async () => {
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (!target) return;
     try {
-      await deleteDocument(id);
-      setDocuments(prev => prev.filter(d => d.id !== id));
-    } catch { alert('Failed to delete.'); }
+      await deleteDocument(target.id);
+      setDocuments((prev) => prev.filter((d) => d.id !== target.id));
+      toast.success(`"${target.name}" deleted`);
+    } catch { toast.error('Failed to delete document.'); }
   };
 
   const handleRetrain = async (id) => {
     try {
       const updated = await retrainDocument(id);
-      setDocuments(prev => prev.map(d => d.id === id ? updated : d));
+      setDocuments((prev) => prev.map((d) => (d.id === id ? updated : d)));
+      toast.success('Retraining started…');
       fetchDocs();
-    } catch { alert('Failed to retrain.'); }
+    } catch { toast.error('Failed to retrain.'); }
   };
 
   if (chatbots.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-20 text-center">
-        <Bot className="w-12 h-12 text-gray-300 mb-4" />
-        <h3 className="text-lg font-semibold text-gray-900 mb-2">No chatbots yet</h3>
-        <p className="text-sm text-gray-500 mb-4">Create a chatbot first, then add knowledge to it.</p>
-        <Link to="/chatbots/new" className="btn-primary">Create a Chatbot</Link>
-      </div>
+      <Card className="py-6">
+        <EmptyState
+          icon={Bot}
+          title="No chatbots yet"
+          description="Create a chatbot first, then feed it knowledge to make it smart."
+          action={<Button asChild><Link to="/chatbots/new"><Plus /> Create a chatbot</Link></Button>}
+        />
+      </Card>
     );
   }
 
-  const hasProcessing = documents.some(d => d.status === 'PROCESSING');
+  const hasProcessing = documents.some((d) => d.status === 'PROCESSING');
+  const readyCount = documents.filter((d) => d.status === 'READY').length;
+  const detectedPairs = bulkFaqText.split('\n').filter((l) => l.includes('|') && l.trim().length > 0).length;
 
   return (
     <div className="space-y-6">
-
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      {/* header + chatbot selector */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Knowledge Base</h2>
-          <p className="text-sm text-gray-500 mt-0.5">Train your chatbot by adding documents, FAQs, and text content</p>
+          <h2 className="text-xl font-bold tracking-tight text-foreground">Knowledge base</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">Feed documents, FAQs, and text so your chatbot answers accurately.</p>
         </div>
         <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-gray-700">Chatbot:</label>
-          <select value={selectedChatbotId} onChange={e => handleChatbotChange(e.target.value)} className="input-field w-48">
-            {chatbots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
-          </select>
+          <Label className="text-muted-foreground">Chatbot</Label>
+          <div className="relative">
+            <select
+              value={selectedChatbotId}
+              onChange={(e) => handleChatbotChange(e.target.value)}
+              className="h-10 w-52 appearance-none rounded-xl border border-input bg-card pl-3.5 pr-9 text-sm font-medium text-foreground shadow-soft transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+            >
+              {chatbots.map((bot) => <option key={bot.id} value={bot.id}>{bot.name}</option>)}
+            </select>
+            <Bot className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          </div>
         </div>
       </div>
 
-      <div className="card">
-        <div className="flex border-b border-gray-200">
-          {TABS.map(tab => {
-            const Icon = tab.icon;
-            return (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium transition-colors ${
-                  activeTab === tab.id ? 'text-brand-600 border-b-2 border-brand-600 -mb-px' : 'text-gray-500 hover:text-gray-700'
-                }`}>
-                <Icon className="w-4 h-4" />{tab.label}
-              </button>
-            );
-          })}
-        </div>
+      {/* upload panel */}
+      <Card>
+        <CardContent className="p-4 sm:p-6">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="flex w-full flex-wrap sm:w-auto">
+              <TabsTrigger value="pdf"><FileText className="h-4 w-4" /> Upload PDF</TabsTrigger>
+              <TabsTrigger value="faq"><MessageSquare className="h-4 w-4" /> Add FAQ</TabsTrigger>
+              <TabsTrigger value="bulkFaq"><ListPlus className="h-4 w-4" /> Bulk FAQ</TabsTrigger>
+              <TabsTrigger value="text"><AlignLeft className="h-4 w-4" /> Paste text</TabsTrigger>
+            </TabsList>
 
-        <div className="p-6">
-          {uploadError  && <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{uploadError}</div>}
-          {uploadSuccess && <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">{uploadSuccess}</div>}
-
-          {activeTab === 'pdf' && (
-            <form onSubmit={handlePdfUpload} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Select PDF file (max 20 MB)</label>
-                <div
-                  className="border-2 border-dashed border-gray-300 rounded-xl p-8 text-center hover:border-brand-400 hover:bg-brand-50 transition-colors cursor-pointer"
-                  onClick={() => document.getElementById('pdfInput').click()}
-                >
-                  <Upload className="w-8 h-8 text-gray-400 mx-auto mb-2" />
-                  {pdfFile ? (
-                    <div>
-                      <p className="text-sm font-medium text-brand-700">{pdfFile.name}</p>
-                      <p className="text-xs text-gray-400">{(pdfFile.size / 1024 / 1024).toFixed(1)} MB</p>
-                    </div>
-                  ) : (
-                    <div>
-                      <p className="text-sm font-medium text-gray-700">Click to upload or drag & drop</p>
-                      <p className="text-xs text-gray-400 mt-1">PDF files only · Max 20 MB</p>
-                    </div>
-                  )}
-                  <input id="pdfInput" type="file" accept=".pdf" className="hidden" onChange={e => setPdfFile(e.target.files[0] || null)} />
-                </div>
-              </div>
-              <div className="flex justify-end">
-                <button type="submit" disabled={uploading || !pdfFile} className="btn-primary flex items-center gap-2">
-                  {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />Uploading...</> : <><Upload className="w-4 h-4" />Upload PDF</>}
-                </button>
-              </div>
-              <p className="text-xs text-gray-400">After upload, text extraction and embedding happen in the background (10–30 seconds for large PDFs).</p>
-            </form>
-          )}
-
-          {activeTab === 'faq' && (
-            <form onSubmit={handleFaqSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Question <span className="text-red-500">*</span></label>
-                <input type="text" value={faqQuestion} onChange={e => setFaqQuestion(e.target.value)} placeholder="e.g., What are your business hours?" required maxLength={500} className="input-field" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Answer <span className="text-red-500">*</span></label>
-                <textarea value={faqAnswer} onChange={e => setFaqAnswer(e.target.value)} placeholder="e.g., We're open Monday–Friday, 9am–6pm EST." required rows={4} maxLength={3000} className="input-field resize-none" />
-                <p className="text-xs text-gray-400 mt-1">{faqAnswer.length}/3000</p>
-              </div>
-              <div className="flex justify-end">
-                <button type="submit" disabled={uploading} className="btn-primary flex items-center gap-2">
-                  {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />Adding...</> : <><Plus className="w-4 h-4" />Add FAQ</>}
-                </button>
-              </div>
-            </form>
-          )}
-
-          {activeTab === 'bulkFaq' && (
-            <div className="space-y-6">
-              <div className="flex items-start gap-2 p-3 bg-brand-50 border border-brand-100 rounded-lg text-xs text-brand-700">
-                <Zap className="w-4 h-4 flex-shrink-0 mt-0.5" />
-                <p>
-                  Train on many questions at once for instant replies — each pair gets its own
-                  quick-answer entry, so matching visitor questions skip AI generation entirely and
-                  reply immediately. Supports up to <strong>50,000 pairs</strong> per import. Large
-                  imports process in the background — you can navigate away and check progress later.
-                </p>
-              </div>
-
-              {/* Option A: upload up to 10 files at once */}
-              <form onSubmit={handleBulkFaqFileUpload} className="space-y-3">
-                <label className="block text-sm font-medium text-gray-700">
-                  Upload up to {MAX_BULK_FAQ_FILES} .txt or .pdf files <span className="text-gray-400 font-normal">(same "question | answer" per line format)</span>
-                </label>
-                <div
-                  className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-brand-400 hover:bg-brand-50 transition-colors cursor-pointer"
-                  onClick={() => document.getElementById('bulkFaqFileInput').click()}
-                >
-                  <Upload className="w-7 h-7 text-gray-400 mx-auto mb-2" />
-                  <p className="text-sm font-medium text-gray-700">Click to select files or drag & drop</p>
-                  <p className="text-xs text-gray-400 mt-1">.txt or .pdf · Max 25 MB each · up to {MAX_BULK_FAQ_FILES} files · 50,000 pairs per file</p>
-                  <input id="bulkFaqFileInput" type="file" accept=".txt,.pdf" multiple className="hidden"
-                    onChange={e => { addBulkFaqFiles(Array.from(e.target.files)); e.target.value = ''; }} />
-                </div>
-
-                {bulkFaqFiles.length > 0 && (
-                  <ul className="space-y-1.5">
-                    {bulkFaqFiles.map((file, i) => (
-                      <li key={i} className="flex items-center justify-between gap-2 text-xs bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
-                        <span className="text-gray-700 truncate">{file.name}</span>
-                        <div className="flex items-center gap-2 flex-shrink-0">
-                          <span className="text-gray-400">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
-                          <button type="button" onClick={() => removeBulkFaqFile(i)} className="text-gray-400 hover:text-red-600">
-                            <X className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-
-                <div className="flex justify-end">
-                  <button type="submit" disabled={uploading || bulkFaqFiles.length === 0} className="btn-primary flex items-center gap-2">
-                    {uploading
-                      ? <><Loader2 className="w-4 h-4 animate-spin" />Uploading...</>
-                      : <><Upload className="w-4 h-4" />Upload {bulkFaqFiles.length > 0 ? `${bulkFaqFiles.length} file${bulkFaqFiles.length === 1 ? '' : 's'}` : ''}</>}
-                  </button>
+            {/* PDF */}
+            <TabsContent value="pdf">
+              <form onSubmit={handlePdfUpload} className="space-y-4">
+                <Dropzone
+                  accept=".pdf"
+                  icon={FileUp}
+                  title={pdfFile ? pdfFile.name : 'Click to upload or drag & drop'}
+                  subtitle={pdfFile ? `${(pdfFile.size / 1024 / 1024).toFixed(1)} MB · click to replace` : 'PDF files only · Max 20 MB'}
+                  onFiles={(files) => setPdfFile(files[0] || null)}
+                />
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-muted-foreground">Text extraction & embedding run in the background (10–30s for large PDFs).</p>
+                  <Button type="submit" loading={uploading} disabled={!pdfFile}><Upload className="h-4 w-4" /> Upload PDF</Button>
                 </div>
               </form>
+            </TabsContent>
 
-              <div className="flex items-center gap-3">
-                <div className="flex-1 h-px bg-gray-200" />
-                <span className="text-xs text-gray-400 font-medium">OR PASTE DIRECTLY</span>
-                <div className="flex-1 h-px bg-gray-200" />
-              </div>
+            {/* FAQ */}
+            <TabsContent value="faq">
+              <form onSubmit={handleFaqSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="q">Question <span className="text-destructive">*</span></Label>
+                  <Input id="q" value={faqQuestion} onChange={(e) => setFaqQuestion(e.target.value)} placeholder="e.g., What are your business hours?" required maxLength={500} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="a">Answer <span className="text-destructive">*</span></Label>
+                  <textarea id="a" value={faqAnswer} onChange={(e) => setFaqAnswer(e.target.value)} placeholder="e.g., We're open Monday–Friday, 9am–6pm EST." required rows={4} maxLength={3000}
+                    className="w-full resize-none rounded-xl border border-input bg-card px-3.5 py-2.5 text-sm text-foreground shadow-soft transition-colors placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+                  <p className="text-right text-xs text-muted-foreground">{faqAnswer.length}/3000</p>
+                </div>
+                <div className="flex justify-end">
+                  <Button type="submit" loading={uploading}><Plus className="h-4 w-4" /> Add FAQ</Button>
+                </div>
+              </form>
+            </TabsContent>
 
-              {/* Option B: paste directly */}
-              <form onSubmit={handleBulkFaqSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    One pair per line: <span className="font-mono text-brand-700">question | answer</span>
-                  </label>
-                  <textarea
-                    value={bulkFaqText}
-                    onChange={e => setBulkFaqText(e.target.value)}
-                    placeholder={BULK_FAQ_PLACEHOLDER}
-                    rows={8}
-                    className="input-field resize-none font-mono text-xs"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    {bulkFaqText.split('\n').filter(l => l.includes('|') && l.trim().length > 0).length} pair(s) detected · max 50,000 per import
+            {/* Bulk FAQ */}
+            <TabsContent value="bulkFaq">
+              <div className="space-y-6">
+                <div className="flex items-start gap-3 rounded-xl border border-primary/20 bg-primary/5 p-3.5 text-xs text-foreground">
+                  <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                  <p className="text-muted-foreground">
+                    Train on many questions at once for <strong className="text-foreground">instant replies</strong> — matched questions skip AI generation
+                    and answer immediately. Up to <strong className="text-foreground">50,000 pairs</strong> per import; large imports process in the background.
                   </p>
                 </div>
+
+                <form onSubmit={handleBulkFaqFileUpload} className="space-y-3">
+                  <Label>Upload up to {MAX_BULK_FAQ_FILES} .txt / .pdf files <span className="font-normal text-muted-foreground">(one "question | answer" per line)</span></Label>
+                  <Dropzone
+                    accept=".txt,.pdf"
+                    multiple
+                    title="Click to select files or drag & drop"
+                    subtitle={`.txt or .pdf · Max 25 MB each · up to ${MAX_BULK_FAQ_FILES} files`}
+                    onFiles={addBulkFaqFiles}
+                  />
+                  {bulkFaqFiles.length > 0 && (
+                    <ul className="space-y-1.5">
+                      {bulkFaqFiles.map((file, i) => (
+                        <li key={i} className="flex items-center justify-between gap-2 rounded-lg border border-border bg-secondary/50 px-3 py-2 text-xs">
+                          <span className="flex items-center gap-2 truncate text-foreground"><FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" /> {file.name}</span>
+                          <div className="flex shrink-0 items-center gap-2">
+                            <span className="text-muted-foreground">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                            <button type="button" onClick={() => removeBulkFaqFile(i)} className="text-muted-foreground hover:text-destructive" aria-label="Remove file"><X className="h-3.5 w-3.5" /></button>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex justify-end">
+                    <Button type="submit" loading={uploading} disabled={bulkFaqFiles.length === 0}>
+                      <Upload className="h-4 w-4" /> Upload{bulkFaqFiles.length > 0 ? ` ${bulkFaqFiles.length} file${bulkFaqFiles.length === 1 ? '' : 's'}` : ''}
+                    </Button>
+                  </div>
+                </form>
+
+                <div className="flex items-center gap-3">
+                  <div className="h-px flex-1 bg-border" />
+                  <span className="text-xs font-medium text-muted-foreground">OR PASTE DIRECTLY</span>
+                  <div className="h-px flex-1 bg-border" />
+                </div>
+
+                <form onSubmit={handleBulkFaqSubmit} className="space-y-3">
+                  <Label>One pair per line: <span className="font-mono text-primary">question | answer</span></Label>
+                  <textarea value={bulkFaqText} onChange={(e) => setBulkFaqText(e.target.value)} placeholder={BULK_FAQ_PLACEHOLDER} rows={8}
+                    className="w-full resize-none rounded-xl border border-input bg-card px-3.5 py-2.5 font-mono text-xs text-foreground shadow-soft transition-colors placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+                  <div className="flex items-center justify-between">
+                    <Badge variant="secondary">{detectedPairs} pair(s) detected</Badge>
+                    <Button type="submit" loading={uploading} disabled={!bulkFaqText.trim()}><ListPlus className="h-4 w-4" /> Import FAQs</Button>
+                  </div>
+                </form>
+              </div>
+            </TabsContent>
+
+            {/* Text */}
+            <TabsContent value="text">
+              <form onSubmit={handleTextSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="tt">Title <span className="text-destructive">*</span></Label>
+                  <Input id="tt" value={textTitle} onChange={(e) => setTextTitle(e.target.value)} placeholder="e.g., Refund Policy, Product Description" required maxLength={255} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="tc">Content <span className="text-destructive">*</span></Label>
+                  <textarea id="tc" value={textContent} onChange={(e) => setTextContent(e.target.value)} placeholder="Paste your text content here…" required rows={8} minLength={10} maxLength={50000}
+                    className="w-full resize-none rounded-xl border border-input bg-card px-3.5 py-2.5 text-sm text-foreground shadow-soft transition-colors placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+                  <p className="text-right text-xs text-muted-foreground">{textContent.length}/50,000</p>
+                </div>
                 <div className="flex justify-end">
-                  <button type="submit" disabled={uploading || !bulkFaqText.trim()} className="btn-primary flex items-center gap-2">
-                    {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />Importing...</> : <><ListPlus className="w-4 h-4" />Import FAQs</>}
-                  </button>
+                  <Button type="submit" loading={uploading}><Plus className="h-4 w-4" /> Add text</Button>
                 </div>
               </form>
-            </div>
-          )}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
 
-          {activeTab === 'text' && (
-            <form onSubmit={handleTextSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Title <span className="text-red-500">*</span></label>
-                <input type="text" value={textTitle} onChange={e => setTextTitle(e.target.value)} placeholder="e.g., Refund Policy, Product Description" required maxLength={255} className="input-field" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Content <span className="text-red-500">*</span></label>
-                <textarea value={textContent} onChange={e => setTextContent(e.target.value)} placeholder="Paste your text content here..." required rows={8} minLength={10} maxLength={50000} className="input-field resize-none" />
-                <p className="text-xs text-gray-400 mt-1">{textContent.length}/50,000</p>
-              </div>
-              <div className="flex justify-end">
-                <button type="submit" disabled={uploading} className="btn-primary flex items-center gap-2">
-                  {uploading ? <><Loader2 className="w-4 h-4 animate-spin" />Adding...</> : <><Plus className="w-4 h-4" />Add Text</>}
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
+      {/* documents */}
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0 border-b border-border">
           <div>
-            <h3 className="text-base font-semibold text-gray-900">Knowledge Base Documents</h3>
-            <p className="text-xs text-gray-400 mt-0.5">
-              {documents.filter(d => d.status === 'READY').length} of {documents.length} documents ready
-            </p>
+            <CardTitle className="flex items-center gap-2"><Database className="h-4 w-4 text-primary" /> Documents</CardTitle>
+            <p className="mt-0.5 text-xs text-muted-foreground">{readyCount} of {documents.length} ready</p>
           </div>
-          {hasProcessing && (
-            <div className="flex items-center gap-1.5 text-xs text-yellow-700 bg-yellow-50 px-2 py-1 rounded-full">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Processing...
-            </div>
-          )}
-        </div>
-        <div className="p-0">
-          {docsLoading
-            ? <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-gray-400" /></div>
-            : <DocumentTable documents={documents} onDelete={handleDelete} onRetrain={handleRetrain} />
-          }
-        </div>
-      </div>
+          {hasProcessing && <Badge variant="warning"><Loader2 className="h-3 w-3 animate-spin" /> Processing…</Badge>}
+        </CardHeader>
+        <CardContent className="p-0">
+          {docsLoading && documents.length === 0
+            ? <div className="flex justify-center py-10"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
+            : <DocumentTable documents={documents} onDelete={(id, name) => setPendingDelete({ id, name })} onRetrain={handleRetrain} />}
+        </CardContent>
+      </Card>
+
+      {/* delete confirm */}
+      <Dialog open={!!pendingDelete} onOpenChange={(o) => !o && setPendingDelete(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete "{pendingDelete?.name}"?</DialogTitle>
+            <DialogDescription>This removes the document and its embeddings from your chatbot's knowledge. This cannot be undone.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button variant="destructive" onClick={doDelete}><X className="h-4 w-4" /> Delete</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

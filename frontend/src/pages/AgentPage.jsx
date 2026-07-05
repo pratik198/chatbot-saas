@@ -1,92 +1,67 @@
 /**
- * WHY this page exists:
- *   The Agent Inbox — where chatbot owners handle live visitor requests.
- *   When a visitor clicks "Talk to a human" in the embed widget,
- *   a handoff request appears here with PENDING status.
- *   The owner (acting as "agent") can accept it, read the conversation history,
- *   reply to the visitor, and close the session.
- *
- * HOW polling works:
- *   The page polls GET /api/handoffs every 5 seconds to check for new requests.
- *   This is simpler than WebSockets and sufficient for low-volume use.
- *   A badge in the sidebar shows the count of PENDING handoffs.
+ * AgentPage — live handoff inbox. Logic unchanged (5s polling of getHandoffs,
+ * getHandoff, accept, reply, close). Restyled two-pane; toasts + styled confirm.
  */
-
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { toast } from 'sonner';
+import { Headphones, Clock, CheckCircle2, XCircle, Send, User, Bot, Loader2, RefreshCw } from 'lucide-react';
+import { Card } from '@/components/ui/Card';
+import { Button } from '@/components/ui/Button';
+import { Badge } from '@/components/ui/Badge';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { LoaderPanel } from '@/components/ui/Spinner';
 import {
-  Headphones, Clock, CheckCircle, XCircle, Send,
-  User, Bot, Loader2, RefreshCw, MessageSquare
-} from 'lucide-react';
-import {
-  getHandoffs, getHandoff, acceptHandoff, agentReply, closeHandoff
-} from '@/lib/handoff';
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogClose,
+} from '@/components/ui/Dialog';
+import { getHandoffs, getHandoff, acceptHandoff, agentReply, closeHandoff } from '@/lib/handoff';
+import { cn, initials, timeAgo } from '@/lib/utils';
 
-const STATUS_COLORS = {
-  PENDING: 'bg-yellow-100 text-yellow-700',
-  ACTIVE:  'bg-green-100 text-green-700',
-  CLOSED:  'bg-gray-100 text-gray-500',
-};
-
-const STATUS_ICONS = {
-  PENDING: Clock,
-  ACTIVE:  CheckCircle,
-  CLOSED:  XCircle,
+const STATUS = {
+  PENDING: { variant: 'warning', icon: Clock },
+  ACTIVE: { variant: 'success', icon: CheckCircle2 },
+  CLOSED: { variant: 'secondary', icon: XCircle },
 };
 
 export default function AgentPage() {
   const [handoffs, setHandoffs] = useState([]);
-  const [selected, setSelected] = useState(null);  // full handoff with messages
+  const [selected, setSelected] = useState(null);
   const [selectedId, setSelectedId] = useState(null);
   const [replyText, setReplyText] = useState('');
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState('');
+  const [confirmClose, setConfirmClose] = useState(false);
   const pollingRef = useRef(null);
   const messagesEndRef = useRef(null);
 
-  // Auto-scroll messages to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [selected?.messages]);
+  useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [selected?.messages]);
 
-  // Load the list of handoffs
   const loadHandoffs = useCallback(async () => {
-    try {
-      const data = await getHandoffs();
-      setHandoffs(data);
-    } catch { /* silent polling failure */ }
-    finally { setLoading(false); }
+    try { setHandoffs(await getHandoffs()); } catch { /* silent */ } finally { setLoading(false); }
   }, []);
 
-  // Poll every 5 seconds for new handoffs
   useEffect(() => {
     loadHandoffs();
     pollingRef.current = setInterval(loadHandoffs, 5000);
     return () => clearInterval(pollingRef.current);
   }, [loadHandoffs]);
 
-  // Reload selected handoff when list updates (new messages from polling)
   useEffect(() => {
-    if (selectedId) {
-      getHandoff(selectedId).then(setSelected).catch(() => {});
-    }
+    if (selectedId) getHandoff(selectedId).then(setSelected).catch(() => {});
   }, [handoffs, selectedId]);
 
-  async function handleSelect(handoff) {
-    setSelectedId(handoff.id);
-    try {
-      const full = await getHandoff(handoff.id);
-      setSelected(full);
-    } catch { setError('Failed to load handoff.'); }
+  async function handleSelect(h) {
+    setSelectedId(h.id);
+    try { setSelected(await getHandoff(h.id)); } catch { toast.error('Failed to load handoff.'); }
   }
 
   async function handleAccept() {
     if (!selected) return;
     try {
       const updated = await acceptHandoff(selected.id);
-      setSelected(prev => ({ ...prev, ...updated }));
-      setHandoffs(prev => prev.map(h => h.id === selected.id ? { ...h, ...updated } : h));
-    } catch { setError('Failed to accept handoff.'); }
+      setSelected((prev) => ({ ...prev, ...updated }));
+      setHandoffs((prev) => prev.map((h) => h.id === selected.id ? { ...h, ...updated } : h));
+      toast.success('Handoff accepted');
+    } catch { toast.error('Failed to accept handoff.'); }
   }
 
   async function handleReply() {
@@ -94,205 +69,141 @@ export default function AgentPage() {
     setSending(true);
     try {
       const msg = await agentReply(selected.id, replyText.trim());
-      setSelected(prev => ({ ...prev, messages: [...(prev.messages || []), msg] }));
+      setSelected((prev) => ({ ...prev, messages: [...(prev.messages || []), msg] }));
       setReplyText('');
-    } catch { setError('Failed to send reply.'); }
+    } catch { toast.error('Failed to send reply.'); }
     finally { setSending(false); }
   }
 
-  async function handleClose() {
+  async function doClose() {
+    setConfirmClose(false);
     if (!selected) return;
-    if (!confirm('Close this handoff session?')) return;
     try {
       await closeHandoff(selected.id);
-      setHandoffs(prev => prev.map(h =>
-        h.id === selected.id ? { ...h, status: 'CLOSED' } : h));
-      setSelected(prev => ({ ...prev, status: 'CLOSED' }));
-    } catch { setError('Failed to close.'); }
+      setHandoffs((prev) => prev.map((h) => h.id === selected.id ? { ...h, status: 'CLOSED' } : h));
+      setSelected((prev) => ({ ...prev, status: 'CLOSED' }));
+      toast.success('Handoff closed');
+    } catch { toast.error('Failed to close.'); }
   }
 
-  function formatTime(d) {
-    if (!d) return '';
-    return new Date(d).toLocaleString('en-US', {
-      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
-    });
-  }
+  if (loading) return <LoaderPanel label="Loading agent inbox…" />;
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <Loader2 className="w-5 h-5 animate-spin text-brand-500 mr-2" />
-      <span className="text-gray-500">Loading agent inbox...</span>
-    </div>
-  );
-
-  const pendingCount = handoffs.filter(h => h.status === 'PENDING').length;
+  const pendingCount = handoffs.filter((h) => h.status === 'PENDING').length;
 
   return (
-    <div>
-      {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between mb-6">
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-gray-900">Agent Inbox</h1>
-          {pendingCount > 0 && (
-            <span className="bg-yellow-100 text-yellow-800 text-xs font-bold px-2.5 py-1 rounded-full">
-              {pendingCount} pending
-            </span>
-          )}
+          <h2 className="text-xl font-bold tracking-tight text-foreground">Agent inbox</h2>
+          {pendingCount > 0 && <Badge variant="warning" dot>{pendingCount} pending</Badge>}
         </div>
-        <button onClick={loadHandoffs} className="btn-secondary flex items-center gap-2 text-sm">
-          <RefreshCw className="w-4 h-4" />
-          Refresh
-        </button>
+        <Button variant="outline" onClick={loadHandoffs}><RefreshCw className="h-4 w-4" /> Refresh</Button>
       </div>
 
-      {error && (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex justify-between">
-          {error}
-          <button onClick={() => setError('')} className="text-red-400 hover:text-red-600">✕</button>
-        </div>
-      )}
-
       {handoffs.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-20 text-center">
-          <div className="w-16 h-16 bg-brand-50 rounded-full flex items-center justify-center mb-4">
-            <Headphones className="w-8 h-8 text-brand-400" />
-          </div>
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">No handoff requests</h2>
-          <p className="text-sm text-gray-400 max-w-xs">
-            When a visitor clicks "Talk to a human" in your chatbot widget,
-            their request will appear here. Polling every 5 seconds.
-          </p>
-        </div>
+        <Card className="py-4">
+          <EmptyState icon={Headphones} title="No handoff requests"
+            description={'When a visitor clicks "Talk to a human" in your widget, their request appears here (polling every 5s).'} />
+        </Card>
       ) : (
-        <div className="flex gap-4 h-[calc(100vh-220px)]">
-
-          {/* ── Handoff List (left) ───────────────────────────────────── */}
-          <div className="w-72 flex-shrink-0 bg-white rounded-xl border border-gray-200 overflow-y-auto">
-            {handoffs.map(h => {
-              const Icon = STATUS_ICONS[h.status] || Clock;
-              return (
-                <button
-                  key={h.id}
-                  onClick={() => handleSelect(h)}
-                  className={`w-full text-left p-4 border-b border-gray-100 hover:bg-gray-50
-                               transition-colors ${selectedId === h.id ? 'bg-brand-50 border-l-2 border-l-brand-500' : ''}`}
-                >
-                  <div className="flex items-start justify-between mb-1">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {h.visitorName || 'Anonymous Visitor'}
-                    </p>
-                    <span className={`text-xs px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ml-2 ${STATUS_COLORS[h.status]}`}>
-                      {h.status}
+        <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
+          {/* list */}
+          <Card className="max-h-[calc(100vh-13rem)] overflow-y-auto p-2">
+            <ul className="space-y-1">
+              {handoffs.map((h) => (
+                <li key={h.id}>
+                  <button onClick={() => handleSelect(h)}
+                    className={cn('flex w-full items-start gap-3 rounded-xl p-3 text-left transition-colors',
+                      selectedId === h.id ? 'bg-primary/10 ring-1 ring-primary/15' : 'hover:bg-secondary')}>
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white" style={{ backgroundImage: 'linear-gradient(135deg,#6366f1,#a855f7)' }}>
+                      {initials(h.visitorName || 'V')}
                     </span>
-                  </div>
-                  <p className="text-xs text-gray-500 truncate">{h.visitorEmail || 'No email'}</p>
-                  <p className="text-xs text-gray-400 mt-1">{formatTime(h.requestedAt)}</p>
-                </button>
-              );
-            })}
-          </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="truncate text-sm font-medium text-foreground">{h.visitorName || 'Anonymous'}</p>
+                        <Badge variant={STATUS[h.status]?.variant}>{h.status}</Badge>
+                      </div>
+                      <p className="truncate text-xs text-muted-foreground">{h.visitorEmail || 'No email'}</p>
+                      <p className="mt-0.5 text-2xs text-muted-foreground">{timeAgo(h.requestedAt)}</p>
+                    </div>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </Card>
 
-          {/* ── Handoff Detail (right) ────────────────────────────────── */}
-          <div className="flex-1 bg-white rounded-xl border border-gray-200 flex flex-col overflow-hidden">
+          {/* detail */}
+          <Card className="flex max-h-[calc(100vh-13rem)] flex-col overflow-hidden p-0">
             {!selected ? (
-              <div className="flex flex-col items-center justify-center flex-1 text-center">
-                <Headphones className="w-10 h-10 text-gray-200 mb-3" />
-                <p className="text-sm text-gray-400">Select a handoff to view details</p>
-              </div>
+              <EmptyState icon={Headphones} title="Select a handoff" description="Pick a request to view the conversation." className="flex-1 py-16" />
             ) : (
               <>
-                {/* ── Handoff header ──────────────────────────── */}
-                <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
+                <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
                   <div>
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-semibold text-gray-900">
-                        {selected.visitorName || 'Anonymous Visitor'}
-                      </p>
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${STATUS_COLORS[selected.status]}`}>
-                        {selected.status}
-                      </span>
+                      <p className="text-sm font-semibold text-foreground">{selected.visitorName || 'Anonymous visitor'}</p>
+                      <Badge variant={STATUS[selected.status]?.variant}>{selected.status}</Badge>
                     </div>
-                    <p className="text-xs text-gray-500">
-                      {selected.visitorEmail} · Requested {formatTime(selected.requestedAt)}
-                    </p>
-                    {selected.reason && (
-                      <p className="text-xs text-gray-600 mt-1 italic">"{selected.reason}"</p>
-                    )}
+                    <p className="text-xs text-muted-foreground">{selected.visitorEmail} · {timeAgo(selected.requestedAt)}</p>
+                    {selected.reason && <p className="mt-1 text-xs italic text-muted-foreground">"{selected.reason}"</p>}
                   </div>
                   <div className="flex gap-2">
-                    {selected.status === 'PENDING' && (
-                      <button onClick={handleAccept} className="btn-primary text-xs py-1.5 px-3">
-                        Accept
-                      </button>
-                    )}
-                    {selected.status === 'ACTIVE' && (
-                      <button onClick={handleClose} className="btn-secondary text-xs py-1.5 px-3 text-red-600">
-                        Close
-                      </button>
-                    )}
+                    {selected.status === 'PENDING' && <Button size="sm" onClick={handleAccept}>Accept</Button>}
+                    {selected.status === 'ACTIVE' && <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10" onClick={() => setConfirmClose(true)}>Close</Button>}
                   </div>
                 </div>
 
-                {/* ── Conversation history ─────────────────────── */}
-                <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+                <div className="flex-1 space-y-3 overflow-y-auto p-4">
                   {(!selected.messages || selected.messages.length === 0) ? (
-                    <p className="text-xs text-gray-400 text-center py-4">No messages in this conversation</p>
-                  ) : (
-                    selected.messages.map(msg => (
-                      <div key={msg.id} className={`flex items-end gap-2 ${msg.role === 'user' ? 'flex-row-reverse' : 'flex-row'}`}>
-                        <div className={`w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0
-                                         ${msg.role === 'user' ? 'bg-gray-100' : 'bg-brand-100'}`}>
-                          {msg.role === 'user'
-                            ? <User className="w-3.5 h-3.5 text-gray-500" />
-                            : <Bot className="w-3.5 h-3.5 text-brand-600" />}
-                        </div>
-                        <div className={`max-w-[70%] rounded-2xl px-3 py-2 text-xs leading-relaxed
-                                          ${msg.role === 'user'
-                                            ? 'bg-gray-100 text-gray-800 rounded-br-none'
-                                            : 'bg-brand-600 text-white rounded-bl-none'}`}>
-                          <p style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</p>
+                    <p className="py-6 text-center text-xs text-muted-foreground">No messages in this conversation</p>
+                  ) : selected.messages.map((msg) => {
+                    const isUser = msg.role === 'user';
+                    return (
+                      <div key={msg.id} className={cn('flex items-end gap-2', isUser ? 'flex-row-reverse' : 'flex-row')}>
+                        <span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-full', isUser ? 'bg-secondary text-muted-foreground' : 'bg-primary/10 text-primary')}>
+                          {isUser ? <User className="h-3.5 w-3.5" /> : <Bot className="h-3.5 w-3.5" />}
+                        </span>
+                        <div className={cn('max-w-[75%] rounded-2xl px-3 py-2 text-xs leading-relaxed',
+                          isUser ? 'rounded-br-none bg-secondary text-foreground' : 'rounded-bl-none bg-brand-gradient text-white')}>
+                          <p className="whitespace-pre-wrap [word-break:break-word]">{msg.content}</p>
                         </div>
                       </div>
-                    ))
-                  )}
+                    );
+                  })}
                   <div ref={messagesEndRef} />
                 </div>
 
-                {/* ── Agent reply input ────────────────────────── */}
                 {selected.status === 'ACTIVE' && (
-                  <div className="border-t border-gray-100 p-3 flex gap-2 flex-shrink-0">
-                    <input
-                      type="text"
-                      value={replyText}
-                      onChange={e => setReplyText(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && handleReply()}
-                      placeholder="Type your reply as agent..."
-                      className="flex-1 text-sm border border-gray-200 rounded-xl px-3 py-2
-                                 focus:outline-none focus:ring-2 focus:ring-brand-500"
-                    />
-                    <button
-                      onClick={handleReply}
-                      disabled={!replyText.trim() || sending}
-                      className="w-9 h-9 bg-brand-600 hover:bg-brand-700 disabled:bg-gray-200
-                                 text-white rounded-xl flex items-center justify-center transition-colors"
-                    >
-                      {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                    </button>
+                  <div className="flex gap-2 border-t border-border p-3">
+                    <input value={replyText} onChange={(e) => setReplyText(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleReply()}
+                      placeholder="Type your reply as agent…"
+                      className="h-10 flex-1 rounded-xl border border-input bg-card px-3.5 text-sm text-foreground shadow-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-ring/40" />
+                    <Button size="icon" onClick={handleReply} disabled={!replyText.trim() || sending}>
+                      {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                    </Button>
                   </div>
                 )}
-
                 {selected.status === 'PENDING' && (
-                  <div className="border-t border-gray-100 p-3 flex-shrink-0">
-                    <p className="text-xs text-center text-gray-400">
-                      Accept the handoff to reply to this visitor.
-                    </p>
-                  </div>
+                  <div className="border-t border-border p-3"><p className="text-center text-xs text-muted-foreground">Accept the handoff to reply to this visitor.</p></div>
                 )}
               </>
             )}
-          </div>
+          </Card>
         </div>
       )}
+
+      <Dialog open={confirmClose} onOpenChange={setConfirmClose}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Close this handoff?</DialogTitle>
+            <DialogDescription>The session will be marked closed and the visitor can no longer reach an agent in this thread.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button variant="destructive" onClick={doClose}>Close handoff</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

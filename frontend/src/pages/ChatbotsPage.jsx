@@ -1,116 +1,156 @@
 /**
- * WHY this page exists:
- *   The "My Chatbots" list page — shows all chatbots with edit/delete/publish actions.
- *
- * HOW it differs from Next.js version:
- *   - Link and no router needed (navigation is in child components)
+ * ChatbotsPage — the "My Chatbots" grid.
+ * API logic unchanged (getChatbots/deleteChatbot/togglePublish); adds client-side
+ * search + status filter, skeletons, staggered cards, and toast feedback.
  */
-
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Bot, Loader2, RefreshCw } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { toast } from 'sonner';
+import { Plus, Bot, RefreshCw, Search } from 'lucide-react';
 import ChatbotCard from '@/components/chatbot/ChatbotCard';
+import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { Card } from '@/components/ui/Card';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/Tabs';
+import { staggerContainer } from '@/components/ui/PageTransition';
 import { getChatbots, deleteChatbot, togglePublish } from '@/lib/chatbots';
 
 export default function ChatbotsPage() {
   const [chatbots, setChatbots] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState('all');
 
-  const fetchChatbots = useCallback(async () => {
+  const fetchChatbots = useCallback(async (isRefresh = false) => {
     try {
       setError('');
+      if (isRefresh) setRefreshing(true);
       const data = await getChatbots();
       setChatbots(data);
     } catch {
       setError('Failed to load chatbots. Please try again.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => { fetchChatbots(); }, [fetchChatbots]);
 
   const handleDelete = async (id, name) => {
-    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return;
     try {
       await deleteChatbot(id);
-      setChatbots(prev => prev.filter(bot => bot.id !== id));
+      setChatbots((prev) => prev.filter((b) => b.id !== id));
+      toast.success(`"${name}" deleted`);
     } catch {
-      alert('Failed to delete chatbot. Please try again.');
+      toast.error('Failed to delete chatbot. Please try again.');
     }
   };
 
   const handleTogglePublish = async (id) => {
     try {
       const updated = await togglePublish(id);
-      setChatbots(prev => prev.map(bot => bot.id === id ? updated : bot));
+      setChatbots((prev) => prev.map((b) => (b.id === id ? updated : b)));
+      toast.success(updated.isPublished ? 'Chatbot is now live 🚀' : 'Chatbot unpublished');
     } catch {
-      alert('Failed to update chatbot status.');
+      toast.error('Failed to update chatbot status.');
     }
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="w-6 h-6 animate-spin text-brand-600" />
-      </div>
-    );
-  }
+  const filtered = useMemo(() => {
+    return chatbots.filter((b) => {
+      const matchesQuery = !query || b.name?.toLowerCase().includes(query.toLowerCase()) || b.description?.toLowerCase().includes(query.toLowerCase());
+      const matchesFilter = filter === 'all' || (filter === 'live' && b.isPublished) || (filter === 'draft' && !b.isPublished);
+      return matchesQuery && matchesFilter;
+    });
+  }, [chatbots, query, filter]);
+
+  const liveCount = chatbots.filter((b) => b.isPublished).length;
 
   return (
     <div className="space-y-6">
-
-      <div className="flex items-center justify-between">
+      {/* toolbar */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">My Chatbots</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {chatbots.length} chatbot{chatbots.length !== 1 ? 's' : ''} total
+          <h2 className="text-xl font-bold tracking-tight text-foreground">Your chatbots</h2>
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            {chatbots.length} total · {liveCount} live
           </p>
         </div>
         <div className="flex gap-2">
-          <button onClick={fetchChatbots} className="btn-secondary flex items-center gap-1.5 text-sm">
-            <RefreshCw className="w-4 h-4" />
-            Refresh
-          </button>
-          <Link to="/chatbots/new" className="btn-primary flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            New Chatbot
-          </Link>
+          <Button variant="outline" onClick={() => fetchChatbots(true)}>
+            <RefreshCw className={refreshing ? 'animate-spin' : ''} /> Refresh
+          </Button>
+          <Button asChild><Link to="/chatbots/new"><Plus /> New Chatbot</Link></Button>
         </div>
       </div>
 
-      {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">{error}</div>
-      )}
-
-      {chatbots.length === 0 && !error && (
-        <div className="card p-12 flex flex-col items-center justify-center text-center">
-          <div className="w-16 h-16 bg-brand-50 rounded-full flex items-center justify-center mb-4">
-            <Bot className="w-8 h-8 text-brand-600" />
+      {/* filters */}
+      {(chatbots.length > 0 || loading) && (
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full sm:max-w-xs">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search chatbots…" className="h-10 pl-10" />
           </div>
-          <h3 className="text-lg font-semibold text-gray-900 mb-2">No chatbots yet</h3>
-          <p className="text-gray-500 text-sm mb-6 max-w-sm">
-            Create your first AI chatbot. Customize its personality, appearance, and connect it to your website.
-          </p>
-          <Link to="/chatbots/new" className="btn-primary flex items-center gap-2">
-            <Plus className="w-4 h-4" />
-            Create Your First Chatbot
-          </Link>
+          <Tabs value={filter} onValueChange={setFilter}>
+            <TabsList>
+              <TabsTrigger value="all">All</TabsTrigger>
+              <TabsTrigger value="live">Live</TabsTrigger>
+              <TabsTrigger value="draft">Draft</TabsTrigger>
+            </TabsList>
+          </Tabs>
         </div>
       )}
 
-      {chatbots.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {chatbots.map(chatbot => (
-            <ChatbotCard
-              key={chatbot.id}
-              chatbot={chatbot}
-              onDelete={handleDelete}
-              onTogglePublish={handleTogglePublish}
-            />
+      {error && (
+        <Card className="border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">{error}</Card>
+      )}
+
+      {/* loading skeletons */}
+      {loading && (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Card key={i} className="p-5">
+              <div className="flex items-center gap-3">
+                <Skeleton className="h-11 w-11 rounded-xl" />
+                <div className="flex-1 space-y-2"><Skeleton className="h-4 w-2/3" /><Skeleton className="h-3 w-1/2" /></div>
+              </div>
+              <div className="mt-4 flex gap-2"><Skeleton className="h-5 w-14 rounded-full" /><Skeleton className="h-5 w-12 rounded-full" /></div>
+              <div className="mt-5 flex gap-2 border-t border-border pt-4"><Skeleton className="h-8 flex-1" /><Skeleton className="h-8 flex-1" /><Skeleton className="h-8 flex-1" /></div>
+            </Card>
           ))}
         </div>
+      )}
+
+      {/* empty: no chatbots at all */}
+      {!loading && chatbots.length === 0 && !error && (
+        <Card className="py-4">
+          <EmptyState
+            icon={Bot}
+            title="Create your first chatbot"
+            description="Design its personality and appearance, train it on your knowledge, and embed it on your site in minutes."
+            action={<Button asChild><Link to="/chatbots/new"><Plus /> Create your first chatbot</Link></Button>}
+          />
+        </Card>
+      )}
+
+      {/* empty: filtered out */}
+      {!loading && chatbots.length > 0 && filtered.length === 0 && (
+        <Card className="py-4"><EmptyState icon={Search} title="No matches" description="Try a different search or filter." /></Card>
+      )}
+
+      {/* grid */}
+      {!loading && filtered.length > 0 && (
+        <motion.div variants={staggerContainer} initial="hidden" animate="show" className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {filtered.map((chatbot) => (
+            <ChatbotCard key={chatbot.id} chatbot={chatbot} onDelete={handleDelete} onTogglePublish={handleTogglePublish} />
+          ))}
+        </motion.div>
       )}
     </div>
   );

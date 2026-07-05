@@ -1,90 +1,134 @@
 /**
- * WHY this component exists:
- *   All dashboard pages share the same shell: sidebar + navbar + content area.
- *   In React Router, a parent Route with <Outlet /> acts as the layout wrapper.
- *   Child routes render inside the <Outlet /> slot.
+ * DashboardLayout — the authenticated app shell.
  *
- * WHAT it does:
- *   - Checks if user is logged in (redirects to /login if not)
- *   - Renders: Sidebar (left) + Navbar (top) + page content (right)
- *   - <Outlet /> is where the actual page renders (DashboardPage, ChatbotsPage, etc.)
+ *   Sidebar (floating, collapsible)  +  Topbar  +  routed page (<Outlet/>)
  *
- * HOW React Router layouts work vs Next.js:
- *   Next.js: layout.jsx wraps {children}
- *   React Router: parent Route with element={<DashboardLayout />} renders <Outlet />
- *   Both produce the same result — layout wraps page content.
+ * Owns cross-cutting shell state:
+ *   - auth gate (redirect to /login)
+ *   - sidebar collapse (persisted) + mobile drawer
+ *   - ⌘K / Ctrl+K command palette
+ *   - per-route fade-in page transition
  */
-
-import { useState, useEffect } from 'react';
+import { useEffect, useState, useCallback, Suspense } from 'react';
 import { Outlet, Navigate, useLocation } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import Sidebar from './Sidebar';
 import Navbar from './Navbar';
+import CommandPalette from './CommandPalette';
 import ChatWidget from '@/components/chat/ChatWidget';
+import { LoaderPanel } from '@/components/ui/Spinner';
 import { isLoggedIn, getUser } from '@/lib/auth';
+import { cn } from '@/lib/utils';
 
-// Map URL paths to human-readable page titles for the Navbar
-const PAGE_TITLES = {
-  '/dashboard':     'Dashboard',
-  '/chatbots':      'Chatbots',
-  '/knowledge':     'Knowledge Base',
-  '/conversations': 'Conversations',
-  '/leads':         'Leads',
-  '/agent':         'Agent Inbox',
-  '/analytics':     'Analytics',
-  '/integrations':  'Integrations',
-  '/settings':      'Settings',
-  '/billing':       'Billing',
-  '/profile':       'Profile',
+const PAGE_META = {
+  '/dashboard':     { title: 'Dashboard',       subtitle: "Here's what's happening across your workspace" },
+  '/chatbots':      { title: 'Chatbots',        subtitle: 'Create, train, and deploy AI assistants' },
+  '/knowledge':     { title: 'Knowledge Base',  subtitle: 'Feed your chatbots documents and FAQs' },
+  '/conversations': { title: 'Conversations',   subtitle: 'Every chat your bots have handled' },
+  '/leads':         { title: 'Leads',           subtitle: 'Contacts captured by your chatbots' },
+  '/agent':         { title: 'Agent Inbox',     subtitle: 'Live handoffs waiting for a human' },
+  '/analytics':     { title: 'Analytics',       subtitle: 'Understand engagement and performance' },
+  '/integrations':  { title: 'Integrations',    subtitle: 'Connect Lumina to your stack' },
+  '/settings':      { title: 'Settings',        subtitle: 'Workspace and account preferences' },
+  '/billing':       { title: 'Billing',         subtitle: 'Plan, usage, and invoices' },
+  '/profile':       { title: 'Profile',         subtitle: 'Manage your personal details' },
 };
 
 export default function DashboardLayout() {
   const location = useLocation();
   const [user, setUser] = useState(null);
   const [checked, setChecked] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem('lumina-sidebar-collapsed') === '1');
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [cmdOpen, setCmdOpen] = useState(false);
 
   useEffect(() => {
     setUser(getUser());
     setChecked(true);
   }, []);
 
-  // Show spinner while checking localStorage
+  // Close the mobile drawer whenever the route changes
+  useEffect(() => { setMobileOpen(false); }, [location.pathname]);
+
+  // ⌘K / Ctrl+K to toggle the command palette
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCmdOpen((o) => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const toggleCollapse = useCallback(() => {
+    setCollapsed((c) => {
+      const next = !c;
+      localStorage.setItem('lumina-sidebar-collapsed', next ? '1' : '0');
+      return next;
+    });
+  }, []);
+
   if (!checked) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="inline-block w-8 h-8 border-4 border-brand-600 border-t-transparent rounded-full animate-spin"></div>
-          <p className="mt-2 text-sm text-gray-500">Loading...</p>
-        </div>
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <LoaderPanel label="Loading your workspace…" />
       </div>
     );
   }
 
-  // Not logged in → redirect to login
-  if (!isLoggedIn()) {
-    return <Navigate to="/login" replace />;
-  }
+  if (!isLoggedIn()) return <Navigate to="/login" replace />;
 
-  // Determine page title from current path (strip trailing /chatbots/:id etc.)
   const basePath = '/' + location.pathname.split('/')[1];
-  const pageTitle = PAGE_TITLES[basePath] || 'Dashboard';
+  const meta = PAGE_META[basePath] || { title: 'Dashboard' };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex">
-      {/* Fixed sidebar on the left — 256px (w-64) wide */}
-      <Sidebar user={user} />
+    <div className="relative min-h-screen bg-background">
+      {/* ambient background wash */}
+      <div className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+        <div className="absolute -left-40 -top-40 h-96 w-96 rounded-full bg-primary/10 blur-[120px]" />
+        <div className="absolute right-0 top-1/3 h-96 w-96 rounded-full bg-fuchsia-500/10 blur-[120px]" />
+      </div>
 
-      {/* Main content area — shifted right by sidebar width */}
-      <div className="flex-1 ml-64 flex flex-col min-h-screen">
-        {/* Sticky top navbar */}
-        <Navbar title={pageTitle} user={user} />
+      <Sidebar
+        user={user}
+        collapsed={collapsed}
+        onToggleCollapse={toggleCollapse}
+        mobileOpen={mobileOpen}
+        onCloseMobile={() => setMobileOpen(false)}
+      />
 
-        {/* Page content — this is where child routes render */}
-        <main className="flex-1 p-6">
-          <Outlet />
+      <div
+        className={cn(
+          'flex min-h-screen flex-col transition-[padding] duration-300 ease-spring',
+          collapsed ? 'lg:pl-[100px]' : 'lg:pl-[272px]',
+        )}
+      >
+        <Navbar
+          title={meta.title}
+          subtitle={meta.subtitle}
+          user={user}
+          onOpenMobileSidebar={() => setMobileOpen(true)}
+          onOpenCommand={() => setCmdOpen(true)}
+        />
+
+        <main className="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          <motion.div
+            key={location.pathname}
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+            className="mx-auto w-full max-w-[1400px]"
+          >
+            <Suspense fallback={<LoaderPanel label="Loading…" />}>
+              <Outlet />
+            </Suspense>
+          </motion.div>
         </main>
       </div>
 
-      {/* Floating chat widget — visible on every dashboard page (Vodafone-style) */}
+      <CommandPalette open={cmdOpen} onOpenChange={setCmdOpen} />
       <ChatWidget />
     </div>
   );

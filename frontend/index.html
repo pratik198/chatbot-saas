@@ -1,15 +1,28 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="light">
   <head>
     <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ChatBot SaaS</title>
-    <meta name="description" content="Build AI chatbots for your website" />
+    <meta name="theme-color" content="#6366f1" />
+    <title>Lumina AI — Build intelligent AI chatbots</title>
+    <meta name="description" content="Lumina AI — the platform to build, train, and deploy intelligent AI chatbots trained on your own knowledge base." />
+
+    <!-- Set the theme before paint to avoid a flash of the wrong theme -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('lumina-theme');
+          var m = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var dark = t === 'dark' || (!t && m);
+          document.documentElement.classList.toggle('dark', dark);
+          document.documentElement.classList.toggle('light', !dark);
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
-    <!-- React mounts the entire app into this div -->
     <div id="root"></div>
-    <!-- Vite replaces this with the bundled JS in production -->
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

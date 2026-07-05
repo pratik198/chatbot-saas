@@ -64,12 +64,27 @@ public class QdrantService {
 
     private final WebClient webClient;
 
+    /**
+     * @param url    Full base URL, e.g. "https://xxx.aws.cloud.qdrant.io" —
+     *               used for Qdrant Cloud in production. Takes precedence
+     *               over host/port when set (non-blank).
+     * @param host   Plain hostname for local dev (default: localhost).
+     * @param port   Plain port for local dev (default: 6333).
+     * @param apiKey Qdrant Cloud API key. Local Qdrant needs no auth, so
+     *               this is blank for local dev and only set in production.
+     */
     public QdrantService(
+            @Value("${qdrant.url:}") String url,
             @Value("${qdrant.host:localhost}") String host,
-            @Value("${qdrant.port:6333}") int port) {
-        this.webClient = WebClient.builder()
-                .baseUrl("http://" + host + ":" + port)
-                .build();
+            @Value("${qdrant.port:6333}") int port,
+            @Value("${qdrant.api-key:}") String apiKey) {
+        String baseUrl = (url != null && !url.isBlank()) ? url : "http://" + host + ":" + port;
+
+        WebClient.Builder builder = WebClient.builder().baseUrl(baseUrl);
+        if (apiKey != null && !apiKey.isBlank()) {
+            builder.defaultHeader("api-key", apiKey);
+        }
+        this.webClient = builder.build();
     }
 
     /**

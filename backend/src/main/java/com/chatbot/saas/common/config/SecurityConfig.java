@@ -2,6 +2,7 @@ package com.chatbot.saas.common.config;
 
 import com.chatbot.saas.user.UserService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -21,6 +22,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -122,12 +124,20 @@ public class SecurityConfig {
      *
      * In production, replace "http://localhost:3000" with your actual frontend URL.
      */
+    @Value("${cors.allowed-origins:http://localhost:3000,http://localhost:3001}")
+    private String allowedOriginsProperty;
+
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Allow requests from these origins (frontend URLs)
-        configuration.setAllowedOrigins(List.of("http://localhost:3000", "http://localhost:3001"));
+        // Allow requests from these origins (frontend URLs) — comma-separated
+        // via CORS_ALLOWED_ORIGINS so production can add its real domain
+        // (e.g. the Vercel URL) without touching code.
+        configuration.setAllowedOrigins(Arrays.stream(allowedOriginsProperty.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList());
 
         // Allow these HTTP methods
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
